@@ -30,12 +30,29 @@
         font-size: 1.1rem;
         line-height: 1.6;
       }
+
+      a.button-link {
+        display: inline-block;
+        margin-top: 1rem;
+        padding: 0.8rem 1.2rem;
+        border-radius: 999px;
+        background: #1f5f8b;
+        color: #fff;
+        text-decoration: none;
+      }
     </style>
   </head>
   <body>
     <main>
       <h1>{{ heading }}</h1>
       <p>{{ message }}</p>
+      {% if is_authenticated %}
+      <p>Signed in as <strong>{{ user }}</strong>.</p>
+      <p><a class="button-link" href="/dashboard">Open dashboard</a></p>
+      <p><a href="/logout">Log out</a></p>
+      {% else %}
+      <p><a class="button-link" href="/login">Log in</a></p>
+      {% endif %}
     </main>
   </body>
 </html>
