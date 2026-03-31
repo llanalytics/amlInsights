@@ -4,3 +4,4 @@ __pycache__/
 .aws-sam/
 .codex
 *.pyc
+check_vm_app.sh

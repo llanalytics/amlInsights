@@ -13,7 +13,7 @@ This project runs FastAPI on AWS Lambda using `Mangum` and AWS SAM, and it can a
 ## 1) Install dependencies
 
 ```bash
-python3.10 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -51,6 +51,8 @@ After deploy, use the `ApiEndpoint` output URL.
 ## 4) Deploy to Heroku
 
 Heroku does not use `template.yaml`. It uses `requirements.txt`, `.python-version`, and `Procfile`.
+
+This repo targets Python `3.13` for Heroku, which is a currently supported major version.
 
 Create the app and deploy:
 
