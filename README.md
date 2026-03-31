@@ -9,6 +9,7 @@ This project runs FastAPI on Heroku with `uvicorn`.
 - `models.py`: database models
 - `auth.py`: password hashing helpers
 - `create_user.py`: bootstrap script for creating a user
+- `set_password.py`: reset a user's password
 - `alembic/`: database migrations
 - `requirements.txt`: Python dependencies
 - `Procfile`: Heroku process definition
@@ -39,6 +40,12 @@ Create your first user:
 
 ```bash
 python create_user.py admin
+```
+
+Reset a user's password later if needed:
+
+```bash
+python set_password.py admin
 ```
 
 ## 2) Run locally
