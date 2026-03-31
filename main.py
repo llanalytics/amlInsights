@@ -1,12 +1,15 @@
-import hashlib
-import hmac
 import os
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+
+from auth import verify_password
+from database import SessionLocal, engine
+from models import Base, User
 
 app = FastAPI()
 app.add_middleware(HTTPSRedirectMiddleware)
@@ -16,18 +19,16 @@ app.add_middleware(
 )
 templates = Jinja2Templates(directory="templates")
 
-DEMO_USERNAME = "admin"
-DEMO_PASSWORD = "changeme123"
-DEMO_PASSWORD_HASH = hashlib.sha256(DEMO_PASSWORD.encode("utf-8")).hexdigest()
+
+Base.metadata.create_all(bind=engine)
+
+
+def get_db() -> Session:
+    return SessionLocal()
 
 
 def is_authenticated(request: Request) -> bool:
-    return request.session.get("user") == DEMO_USERNAME
-
-
-def verify_password(password: str) -> bool:
-    password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
-    return hmac.compare_digest(password_hash, DEMO_PASSWORD_HASH)
+    return "user" in request.session
 
 
 @app.get("/")
@@ -56,15 +57,22 @@ def login_page(request: Request):
         context={
             "title": "Login",
             "error": None,
+            "has_users": has_users(),
         },
     )
 
 
 @app.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    if username == DEMO_USERNAME and verify_password(password):
-        request.session["user"] = username
-        return RedirectResponse(url="/dashboard", status_code=303)
+    db = get_db()
+
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if user and verify_password(password, user.password_hash):
+            request.session["user"] = user.username
+            return RedirectResponse(url="/dashboard", status_code=303)
+    finally:
+        db.close()
 
     return templates.TemplateResponse(
         request=request,
@@ -72,6 +80,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         context={
             "title": "Login",
             "error": "Invalid username or password.",
+            "has_users": has_users(),
         },
         status_code=401,
     )
@@ -96,6 +105,14 @@ def dashboard(request: Request):
 def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/", status_code=303)
+
+
+def has_users() -> bool:
+    db = get_db()
+    try:
+        return db.query(User.id).first() is not None
+    finally:
+        db.close()
 
 
 @app.get("/health")

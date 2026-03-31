@@ -5,3 +5,4 @@ __pycache__/
 .codex
 *.pyc
 check_vm_app.sh
+app.db

@@ -88,7 +88,9 @@
         </label>
         <button type="submit">Log in</button>
       </form>
-      <p class="hint">Starter credentials: <strong>admin</strong> / <strong>changeme123</strong></p>
+      {% if not has_users %}
+      <p class="hint">No users exist yet. Create one with <code>python create_user.py your_username</code>.</p>
+      {% endif %}
       <p><a class="button-link" href="/">Back home</a></p>
     </main>
   </body>

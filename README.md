@@ -4,7 +4,11 @@ This project runs FastAPI on Heroku with `uvicorn`.
 
 ## Files
 
-- `main.py`: FastAPI app
+- `main.py`: FastAPI app and routes
+- `database.py`: SQLAlchemy engine and session setup
+- `models.py`: database models
+- `auth.py`: password hashing helpers
+- `create_user.py`: bootstrap script for creating a user
 - `requirements.txt`: Python dependencies
 - `Procfile`: Heroku process definition
 - `.python-version`: Python version used by Heroku
@@ -17,7 +21,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 2) Run locally (optional)
+Set environment variables:
+
+```bash
+export SECRET_KEY="replace-this-with-a-long-random-secret"
+export DATABASE_URL="sqlite:///./app.db"
+```
+
+Create your first user:
+
+```bash
+python create_user.py admin
+```
+
+## 2) Run locally
 
 ```bash
 uvicorn main:app --reload
@@ -44,7 +61,16 @@ Then open the app:
 heroku open
 ```
 
+For a database on Heroku, provision Postgres and keep `SECRET_KEY` set:
+
+```bash
+heroku addons:create heroku-postgresql:essential-0
+heroku config:set SECRET_KEY="replace-this-with-a-long-random-secret"
+```
+
 ## Endpoints
 
-- `GET /` -> hello world message
+- `GET /` -> homepage
+- `GET /login` -> login form
+- `GET /dashboard` -> protected page
 - `GET /health` -> health check
