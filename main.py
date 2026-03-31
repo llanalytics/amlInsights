@@ -21,6 +21,9 @@ app.add_middleware(HTTPSRedirectMiddleware)
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,
+    https_only=True,
+    same_site="lax",
+    max_age=60 * 60 * 8,
 )
 templates = Jinja2Templates(directory="templates")
 
