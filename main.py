@@ -12,11 +12,15 @@ from auth import hash_password, needs_rehash, verify_password
 from database import SessionLocal
 from models import User
 
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required.")
+
 app = FastAPI()
 app.add_middleware(HTTPSRedirectMiddleware)
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ.get("SECRET_KEY", "dev-secret-change-me"),
+    secret_key=SECRET_KEY,
 )
 templates = Jinja2Templates(directory="templates")
 

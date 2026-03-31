@@ -30,6 +30,8 @@ export SECRET_KEY="replace-this-with-a-long-random-secret"
 export DATABASE_URL="sqlite:///./app.db"
 ```
 
+`SECRET_KEY` is required. The app will not start without it.
+
 Run the database migration:
 
 ```bash
