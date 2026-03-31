@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
-from auth import verify_password
+from auth import hash_password, needs_rehash, verify_password
 from database import SessionLocal
 from models import User
 
@@ -66,6 +66,9 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     try:
         user = db.query(User).filter(User.username == username).first()
         if user and verify_password(password, user.password_hash):
+            if needs_rehash(user.password_hash):
+                user.password_hash = hash_password(password)
+                db.commit()
             request.session["user"] = user.username
             return RedirectResponse(url="/dashboard", status_code=303)
     finally:
