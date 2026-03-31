@@ -9,6 +9,7 @@ This project runs FastAPI on Heroku with `uvicorn`.
 - `models.py`: database models
 - `auth.py`: password hashing helpers
 - `create_user.py`: bootstrap script for creating a user
+- `alembic/`: database migrations
 - `requirements.txt`: Python dependencies
 - `Procfile`: Heroku process definition
 - `.python-version`: Python version used by Heroku
@@ -26,6 +27,12 @@ Set environment variables:
 ```bash
 export SECRET_KEY="replace-this-with-a-long-random-secret"
 export DATABASE_URL="sqlite:///./app.db"
+```
+
+Run the database migration:
+
+```bash
+alembic upgrade head
 ```
 
 Create your first user:
@@ -67,6 +74,8 @@ For a database on Heroku, provision Postgres and keep `SECRET_KEY` set:
 heroku addons:create heroku-postgresql:essential-0
 heroku config:set SECRET_KEY="replace-this-with-a-long-random-secret"
 ```
+
+Heroku now runs migrations automatically during deploy via the `release` process in [`Procfile`](/home/ehale/Documents/test1/Procfile#L1).
 
 ## Endpoints
 

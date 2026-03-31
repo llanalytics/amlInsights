@@ -8,8 +8,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
 from auth import verify_password
-from database import SessionLocal, engine
-from models import Base, User
+from database import SessionLocal
+from models import User
 
 app = FastAPI()
 app.add_middleware(HTTPSRedirectMiddleware)
@@ -18,9 +18,6 @@ app.add_middleware(
     secret_key=os.environ.get("SECRET_KEY", "dev-secret-change-me"),
 )
 templates = Jinja2Templates(directory="templates")
-
-
-Base.metadata.create_all(bind=engine)
 
 
 def get_db() -> Session:

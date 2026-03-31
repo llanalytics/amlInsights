@@ -3,9 +3,11 @@
 import getpass
 import sys
 
+from sqlalchemy.exc import OperationalError, ProgrammingError
+
 from auth import hash_password
-from database import SessionLocal, engine
-from models import Base, User
+from database import SessionLocal
+from models import User
 
 
 def main() -> int:
@@ -29,7 +31,6 @@ def main() -> int:
         print("Passwords do not match.")
         return 1
 
-    Base.metadata.create_all(bind=engine)
     session = SessionLocal()
 
     try:
@@ -43,6 +44,10 @@ def main() -> int:
         session.commit()
         print(f"Created user '{username}'.")
         return 0
+    except (OperationalError, ProgrammingError) as exc:
+        print("Database schema is not ready yet. Run `alembic upgrade head` first.")
+        print(f"Details: {exc.__class__.__name__}")
+        return 1
     finally:
         session.close()
 
