@@ -36,7 +36,10 @@
       <h1>Dashboard</h1>
       <p>You are signed in as <strong>{{ user }}</strong>.</p>
       <p>This is a protected page that only loads when the session cookie is present.</p>
-      <p><a href="/logout">Log out</a></p>
+      <form method="post" action="/logout">
+        <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+        <button type="submit">Log out</button>
+      </form>
     </main>
   </body>
 </html>

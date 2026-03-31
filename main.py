@@ -1,6 +1,7 @@
 import os
+import secrets
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -28,6 +29,20 @@ def is_authenticated(request: Request) -> bool:
     return "user" in request.session
 
 
+def get_csrf_token(request: Request) -> str:
+    csrf_token = request.session.get("csrf_token")
+    if not csrf_token:
+        csrf_token = secrets.token_urlsafe(32)
+        request.session["csrf_token"] = csrf_token
+    return csrf_token
+
+
+def validate_csrf(request: Request, csrf_token: str) -> None:
+    session_token = request.session.get("csrf_token")
+    if not session_token or not secrets.compare_digest(session_token, csrf_token):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token.")
+
+
 @app.get("/")
 def hello_world(request: Request):
     return templates.TemplateResponse(
@@ -39,6 +54,7 @@ def hello_world(request: Request):
             "message": "The app is running and serving HTML with Jinja2 templates.",
             "is_authenticated": is_authenticated(request),
             "user": request.session.get("user"),
+            "csrf_token": get_csrf_token(request),
         },
     )
 
@@ -55,12 +71,19 @@ def login_page(request: Request):
             "title": "Login",
             "error": None,
             "has_users": has_users(),
+            "csrf_token": get_csrf_token(request),
         },
     )
 
 
 @app.post("/login")
-def login(request: Request, username: str = Form(...), password: str = Form(...)):
+def login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    validate_csrf(request, csrf_token)
     db = get_db()
 
     try:
@@ -81,6 +104,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
             "title": "Login",
             "error": "Invalid username or password.",
             "has_users": has_users(),
+            "csrf_token": get_csrf_token(request),
         },
         status_code=401,
     )
@@ -97,12 +121,14 @@ def dashboard(request: Request):
         context={
             "title": "Dashboard",
             "user": request.session["user"],
+            "csrf_token": get_csrf_token(request),
         },
     )
 
 
-@app.get("/logout")
-def logout(request: Request):
+@app.post("/logout")
+def logout(request: Request, csrf_token: str = Form(...)):
+    validate_csrf(request, csrf_token)
     request.session.clear()
     return RedirectResponse(url="/", status_code=303)
 

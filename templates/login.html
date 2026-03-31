@@ -78,6 +78,7 @@
       <p class="error">{{ error }}</p>
       {% endif %}
       <form method="post" action="/login">
+        <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
         <label>
           Username
           <input name="username" type="text" autocomplete="username" required>
