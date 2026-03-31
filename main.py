@@ -1,11 +1,21 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.templating import Jinja2Templates
 
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 
 
 @app.get("/")
-def hello_world() -> dict[str, str]:
-    return {"message": "Hello, World from FastAPI on Heroku!"}
+def hello_world(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={
+            "title": "Test1",
+            "heading": "Hello, World from FastAPI on Heroku!",
+            "message": "The app is running and serving HTML with Jinja2 templates.",
+        },
+    )
 
 
 @app.get("/health")
