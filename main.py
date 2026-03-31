@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Request
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
 app = FastAPI()
+app.add_middleware(HTTPSRedirectMiddleware)
 templates = Jinja2Templates(directory="templates")
 
 
