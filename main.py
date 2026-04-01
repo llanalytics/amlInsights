@@ -56,7 +56,7 @@ def hello_world(request: Request):
         request=request,
         name="index.html",
         context={
-            "title": "Test1",
+            "title": "AML Insights",
             "heading": "Hello, World from FastAPI on Heroku!",
             "message": "The app is running and serving HTML with Jinja2 templates.",
             "is_authenticated": is_authenticated(request),
