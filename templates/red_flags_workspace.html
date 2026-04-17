@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+      :root {
+        --bg-a: #eef4fb;
+        --bg-b: #f8efe7;
+        --ink: #1d2a36;
+        --brand: #1f5f8b;
+        --panel: rgba(255, 255, 255, 0.94);
+        --ok: #14642c;
+        --warn: #8a5b16;
+        --bad: #8b1f1f;
+      }
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background: linear-gradient(135deg, var(--bg-a), var(--bg-b));
+        color: var(--ink);
+      }
+      main {
+        max-width: 1320px;
+        margin: 2rem auto 3rem;
+        padding: 1rem;
+      }
+      .panel {
+        background: var(--panel);
+        border-radius: 14px;
+        box-shadow: 0 14px 32px rgba(20, 34, 49, 0.14);
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      details.panel {
+        padding: 0;
+        overflow: hidden;
+      }
+      .accordion-title {
+        list-style: none;
+        cursor: pointer;
+        padding: 1rem;
+        font-weight: 700;
+        border-bottom: 1px solid #d8e1e9;
+        user-select: none;
+      }
+      .accordion-title::-webkit-details-marker { display: none; }
+      .accordion-title::after {
+        content: "▾";
+        float: right;
+        color: #4d6478;
+      }
+      details.panel:not([open]) .accordion-title { border-bottom: none; }
+      details.panel:not([open]) .accordion-title::after { content: "▸"; }
+      .accordion-body { padding: 1rem; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(160px, 1fr));
+        gap: 0.6rem;
+      }
+      label {
+        display: block;
+        font-size: 0.9rem;
+      }
+      input, select, button {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 0.2rem;
+        padding: 0.55rem;
+        border-radius: 8px;
+        border: 1px solid #b6c7d6;
+        font-family: inherit;
+      }
+      button {
+        background: var(--brand);
+        color: #fff;
+        border: none;
+        cursor: pointer;
+      }
+      button.secondary { background: #5f7388; }
+      button.danger { background: var(--bad); }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 0.45rem;
+        border-bottom: 1px solid #d8e1e9;
+        vertical-align: top;
+        font-size: 0.92rem;
+      }
+      .table-wrap {
+        width: 100%;
+        overflow-x: auto;
+      }
+      .status {
+        font-weight: 600;
+      }
+      .status.draft, .status.returned { color: var(--warn); }
+      .status.pending_approval { color: var(--brand); }
+      .status.approved { color: var(--ok); }
+      .status.rejected { color: var(--bad); }
+      .pill {
+        display: inline-block;
+        padding: 0.15rem 0.45rem;
+        border-radius: 999px;
+        background: #e5eef6;
+        color: #24445f;
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+      .subtle {
+        color: #4d6478;
+        font-size: 0.85rem;
+      }
+      .msg {
+        min-height: 1.2rem;
+        color: var(--brand);
+        font-size: 0.95rem;
+      }
+      .chart-row {
+        display: grid;
+        grid-template-columns: 160px 1fr 64px;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 0.45rem 0;
+      }
+      .chart-track {
+        width: 100%;
+        background: #e7eef6;
+        border-radius: 999px;
+        overflow: hidden;
+        height: 16px;
+      }
+      .chart-bar {
+        height: 100%;
+        background: linear-gradient(90deg, #dd7a2f, #c83f36);
+      }
+      .chart-value {
+        text-align: right;
+        font-weight: 600;
+      }
+      .assistant-log {
+        border: 1px solid #d7e0e8;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.9);
+        padding: 0.7rem;
+        max-height: 240px;
+        overflow: auto;
+      }
+      .assistant-msg {
+        margin: 0 0 0.6rem 0;
+        padding: 0.5rem 0.6rem;
+        border-radius: 8px;
+      }
+      .assistant-msg.user {
+        background: #e7f0f8;
+      }
+      .assistant-msg.bot {
+        background: #f3f6e9;
+      }
+      .assistant-seeds {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+      .assistant-seed {
+        width: auto;
+        background: #e5eef6;
+        color: #1f5f8b;
+        border: 1px solid #b8cfe3;
+      }
+      .id-link {
+        color: var(--brand);
+        text-decoration: underline;
+        cursor: pointer;
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(76px, 1fr));
+        gap: 0.3rem;
+      }
+      .catalog-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0.3rem;
+      }
+      .hidden {
+        display: none !important;
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(16, 28, 40, 0.55);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        z-index: 1000;
+      }
+      .modal.open { display: flex; }
+      .modal-card {
+        width: min(980px, 96vw);
+        max-height: 88vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 12px;
+        padding: 1rem;
+        box-shadow: 0 16px 38px rgba(16, 28, 40, 0.25);
+      }
+      @media (max-width: 900px) {
+        .grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <details class="panel" id="topPanel" open>
+        <summary class="accordion-title">Red Flags Workspace</summary>
+        <div class="accordion-body">
+          <p>Signed in as <strong>{{ user }}</strong>. This workspace is role/state driven from workflow policy.</p>
+          <p><a href="/dashboard">Back to dashboard</a></p>
+          <div style="margin-top:0.7rem;">
+            <h3 style="margin:0 0 0.35rem 0;">Workflow</h3>
+            <p class="subtle" style="margin:0 0 0.35rem 0;">Selected red flags by workflow stage.</p>
+            <div id="workflowChart"></div>
+            <div id="workflowChartMsg" class="msg"></div>
+          </div>
+          <div id="message" class="msg"></div>
+        </div>
+      </details>
+
+      <details class="panel" id="catalogPanel">
+        <summary class="accordion-title">Catalog</summary>
+        <div class="accordion-body">
+        <p class="subtle">Catalog Assistant: interactive search using OpenAI (when enabled) to filter catalog results.</p>
+        <div class="assistant-log" id="assistantLog"></div>
+        <label style="margin-top:0.7rem;">Ask about your institution, products, services, geographies, regulator, or customer types
+          <input id="assistantInput" placeholder="Example: Regional bank with correspondent banking and wires across LATAM/EMEA">
+        </label>
+        <div style="margin-top:0.6rem; display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.6rem;">
+          <button onclick="sendAssistantMessage()">Ask Assistant</button>
+          <button class="secondary" onclick="loadAssistantSeedQuestions()">Load Seed Questions</button>
+          <button class="secondary" onclick="clearAssistantCatalogFilter()">Clear Assistant Filter</button>
+        </div>
+        <div id="assistantSeedQuestions" class="assistant-seeds" style="margin-top:0.7rem;"></div>
+        <div id="assistantInfo" class="msg"></div>
+        <div class="grid">
+          <label>Business Unit
+            <select id="catalogBusinessUnit"></select>
+          </label>
+          <label>Source
+            <select id="catalogSource"><option value="">(all)</option></select>
+          </label>
+          <label>Category
+            <select id="catalogCategory"><option value="">(all)</option></select>
+          </label>
+          <label>Product
+            <select id="catalogProduct"><option value="">(all)</option></select>
+          </label>
+          <label>Service
+            <select id="catalogService"><option value="">(all)</option></select>
+          </label>
+          <label>Search Text
+            <input id="catalogQuery" placeholder="contains...">
+          </label>
+          <label>Page Size
+            <select id="catalogLimit">
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+          <label>&nbsp;
+            <button onclick="loadCatalog(true)">Apply Filters</button>
+          </label>
+        </div>
+        <div style="margin-top:0.6rem; display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.6rem;">
+          <button class="secondary" onclick="prevCatalogPage()">Previous</button>
+          <button class="secondary" onclick="nextCatalogPage()">Next</button>
+          <button class="secondary" onclick="resetCatalogFilters()">Reset Filters</button>
+        </div>
+        <div id="catalogInfo" class="msg"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Flag</th>
+                <th>Source</th>
+                <th>Category</th>
+                <th>Severity</th>
+                <th>Text</th>
+                <th>Products</th>
+                <th>Services</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="catalogRows"></tbody>
+          </table>
+        </div>
+        </div>
+      </details>
+
+      <details class="panel" id="inFlightPanel">
+        <summary class="accordion-title">In Flight</summary>
+        <div class="accordion-body">
+        <p class="subtle">Selections currently moving through workflow.</p>
+        <div id="inFlightInfo" class="msg"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Business Unit</th>
+                <th>Source</th>
+                <th>Red Flag</th>
+                <th>Relevance</th>
+                <th>Status</th>
+                <th>Rationale</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="inFlightRows"></tbody>
+          </table>
+        </div>
+        </div>
+      </details>
+
+      <details class="panel" id="completedPanel">
+        <summary class="accordion-title">Completed</summary>
+        <div class="accordion-body">
+        <p class="subtle">Selections in terminal workflow states (for example approved/rejected).</p>
+        <div id="completedInfo" class="msg"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Business Unit</th>
+                <th>Source</th>
+                <th>Red Flag</th>
+                <th>Relevance</th>
+                <th>Status</th>
+                <th>Rationale</th>
+                <th>Submitted</th>
+                <th>Approved</th>
+              </tr>
+            </thead>
+            <tbody id="completedRows"></tbody>
+          </table>
+        </div>
+        </div>
+      </details>
+    </main>
+
+    {% include "components/selection_audit_modal.html" %}
+
+    <script>
+      const DEFAULT_USER_EMAIL = {{ default_user_email | tojson }};
+      const DEFAULT_TENANT_ID = {{ default_tenant_id | tojson }};
+      let WORKSPACE_POLICY = null;
+      let businessUnits = [];
+      let catalogOffset = 0;
+      let catalogTotal = 0;
+      let terminalStates = ["approved"];
+      let assistantCatalogIds = [];
+      let assistantBusy = false;
+      const URL_PARAMS = new URLSearchParams(window.location.search);
+      const INITIAL_VIEW = String(URL_PARAMS.get("view") || "").trim().toLowerCase();
+      const INITIAL_STATUS = String(URL_PARAMS.get("status") || "").trim().toLowerCase();
+
+      function el(id) { return document.getElementById(id); }
+      function msg(text, bad = false) {
+        const m = el("message");
+        m.textContent = text || "";
+        m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      function headers() {
+        return {
+          "Content-Type": "application/json",
+          "x-user-email": String(DEFAULT_USER_EMAIL || "").trim(),
+          "x-tenant-id": String(DEFAULT_TENANT_ID || "").trim()
+        };
+      }
+      function chartMsg(text, bad = false) {
+        const m = el("workflowChartMsg");
+        if (!m) return;
+        m.textContent = text || "";
+        m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      function shortText(v, n = 92) {
+        if (!v) return "";
+        return v.length > n ? (v.slice(0, n) + "...") : v;
+      }
+      function esc(v) {
+        return String(v || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+      function formatTimestamp(v) {
+        if (!v) return "";
+        const d = new Date(v);
+        if (Number.isNaN(d.getTime())) return String(v);
+        return d.toLocaleString();
+      }
+      async function call(path, method = "GET", body = null) {
+        const res = await fetch(path, { method, headers: headers(), body: body ? JSON.stringify(body) : null });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+        }
+        return data;
+      }
+      function buildWorkspaceDataQuery(includeCatalog = false) {
+        const query = new URLSearchParams();
+        query.set("include_catalog", includeCatalog ? "true" : "false");
+        if (INITIAL_VIEW === "approvals" && !INITIAL_STATUS) {
+          query.set("approval_status", "pending_approval");
+        } else if (INITIAL_STATUS) {
+          query.set("approval_status", INITIAL_STATUS);
+        }
+        if (includeCatalog) {
+          const params = readCatalogParams();
+          if (params.business_unit_id) query.set("catalog_business_unit_id", String(params.business_unit_id));
+          if (params.source_name) query.set("catalog_source_name", params.source_name);
+          if (params.category) query.set("catalog_category", params.category);
+          if (params.product) query.set("catalog_product", params.product);
+          if (params.service) query.set("catalog_service", params.service);
+          if (params.q) query.set("catalog_q", params.q);
+          query.set("catalog_limit", String(params.limit));
+          query.set("catalog_offset", String(catalogOffset));
+          if (Array.isArray(assistantCatalogIds) && assistantCatalogIds.length) {
+            query.set("assistant_ids", assistantCatalogIds.join(","));
+          }
+        }
+        return query;
+      }
+      function fillSelect(id, values) {
+        const sel = el(id);
+        const current = sel.value;
+        sel.innerHTML = "";
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.textContent = "(all)";
+        sel.appendChild(empty);
+        for (const value of (values || [])) {
+          const o = document.createElement("option");
+          o.value = String(value);
+          o.textContent = String(value);
+          sel.appendChild(o);
+        }
+        if (current && Array.from(sel.options).some((opt) => opt.value === current)) {
+          sel.value = current;
+        }
+      }
+      function populateBusinessUnits() {
+        const buSel = el("catalogBusinessUnit");
+        buSel.innerHTML = "";
+        if (!Array.isArray(businessUnits) || !businessUnits.length) {
+          const o = document.createElement("option");
+          o.value = "";
+          o.textContent = "(no active business units)";
+          buSel.appendChild(o);
+          return;
+        }
+        for (const b of businessUnits) {
+          const o = document.createElement("option");
+          o.value = String(b.id);
+          o.textContent = `${b.code} - ${b.name}`;
+          buSel.appendChild(o);
+        }
+      }
+      function appendAssistantMessage(role, text) {
+        const log = el("assistantLog");
+        if (!log) return;
+        const row = document.createElement("div");
+        row.className = `assistant-msg ${role}`;
+        row.innerHTML = `<strong>${role === "user" ? "You" : "Assistant"}:</strong> ${esc(text)}`;
+        log.appendChild(row);
+        log.scrollTop = log.scrollHeight;
+      }
+      async function loadAssistantSeedQuestions() {
+        if (!isCatalogVisible()) return;
+        const businessUnitId = Number(el("catalogBusinessUnit").value || 0);
+        const wrap = el("assistantSeedQuestions");
+        if (!wrap) return;
+        wrap.innerHTML = "";
+        if (!businessUnitId) {
+          const hint = document.createElement("span");
+          hint.className = "subtle";
+          hint.textContent = "Select a business unit to load seed questions.";
+          wrap.appendChild(hint);
+          return;
+        }
+        try {
+          const data = await call(`/api/red-flags/catalog-assistant/seed-questions?business_unit_id=${businessUnitId}`, "GET");
+          for (const q of (data.questions || [])) {
+            const b = document.createElement("button");
+            b.className = "assistant-seed";
+            b.textContent = q;
+            b.onclick = () => { el("assistantInput").value = q; };
+            wrap.appendChild(b);
+          }
+        } catch (e) {
+          msg(`Assistant seed questions failed: ${e.message}`, true);
+        }
+      }
+      async function sendAssistantMessage() {
+        if (!isCatalogVisible()) return;
+        if (assistantBusy) return;
+        const businessUnitId = Number(el("catalogBusinessUnit").value || 0);
+        if (!businessUnitId) {
+          msg("Select a business unit first so the assistant can scope recommendations.", true);
+          return;
+        }
+        const messageText = String(el("assistantInput").value || "").trim();
+        if (!messageText) {
+          msg("Enter context or a question for the assistant.", true);
+          return;
+        }
+        assistantBusy = true;
+        appendAssistantMessage("user", messageText);
+        el("assistantInfo").textContent = "Running catalog search...";
+        try {
+          const data = await call("/api/red-flags/catalog-assistant/chat", "POST", {
+            business_unit_id: businessUnitId,
+            message: messageText
+          });
+          appendAssistantMessage("bot", data.message || "No response.");
+          assistantCatalogIds = (data.matches || [])
+            .map((m) => String(m.id || "").trim())
+            .filter((v) => !!v);
+          await loadCatalog(true);
+          const mode = data.mode || "rules";
+          el("assistantInfo").textContent = `Mode: ${mode}. Catalog filtered to ${(data.matches || []).length} matched red flags. Tokens used: ${data.token_count || 0}.`;
+        } catch (e) {
+          msg(`Assistant search failed: ${e.message}`, true);
+          el("assistantInfo").textContent = "";
+        } finally {
+          assistantBusy = false;
+        }
+      }
+      async function clearAssistantCatalogFilter() {
+        if (!isCatalogVisible()) return;
+        assistantCatalogIds = [];
+        if (el("assistantInput")) el("assistantInput").value = "";
+        if (el("assistantInfo")) el("assistantInfo").textContent = "Assistant filter cleared.";
+        const log = el("assistantLog");
+        if (log) {
+          log.innerHTML = "";
+          appendAssistantMessage("bot", "Tell me about your institution and business unit context. I will suggest relevant red flags from the catalog only.");
+        }
+        await loadCatalog(true);
+        await loadAssistantSeedQuestions();
+      }
+      async function loadWorkspacePolicy() {
+        WORKSPACE_POLICY = await call("/api/red-flags/workspace-policy", "GET");
+        const sections = (WORKSPACE_POLICY && WORKSPACE_POLICY.sections) || {};
+        if (el("catalogPanel")) el("catalogPanel").classList.toggle("hidden", sections.catalog && sections.catalog.visible === false);
+        if (el("inFlightPanel")) el("inFlightPanel").classList.toggle("hidden", sections.in_flight && sections.in_flight.visible === false);
+        if (el("completedPanel")) el("completedPanel").classList.toggle("hidden", sections.completed && sections.completed.visible === false);
+        const terms = (((WORKSPACE_POLICY || {}).capabilities || {}).terminal_states || []);
+        terminalStates = Array.isArray(terms) && terms.length ? terms : ["approved"];
+        applyViewPreset();
+      }
+      function applyViewPreset() {
+        if (INITIAL_VIEW === "selections") {
+          if (el("catalogPanel")) el("catalogPanel").classList.remove("hidden");
+          if (el("inFlightPanel")) el("inFlightPanel").classList.remove("hidden");
+          if (el("completedPanel")) el("completedPanel").classList.add("hidden");
+          return;
+        }
+        if (INITIAL_VIEW === "approvals") {
+          if (el("catalogPanel")) el("catalogPanel").classList.add("hidden");
+          if (el("inFlightPanel")) el("inFlightPanel").classList.remove("hidden");
+          if (el("completedPanel")) el("completedPanel").classList.add("hidden");
+          return;
+        }
+        if (INITIAL_VIEW === "audit") {
+          if (el("catalogPanel")) el("catalogPanel").classList.add("hidden");
+          if (el("inFlightPanel")) el("inFlightPanel").classList.add("hidden");
+          if (el("completedPanel")) el("completedPanel").classList.remove("hidden");
+        }
+      }
+      function isCatalogVisible() {
+        const panel = el("catalogPanel");
+        return !!panel && !panel.classList.contains("hidden");
+      }
+      async function loadWorkflowSummaryChart() {
+        const container = el("workflowChart");
+        if (!container) return;
+        try {
+          const res = await fetch("/api/red-flags/workflow-summary", { headers: headers() });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            if (res.status === 401 || res.status === 403) {
+              container.innerHTML = "<p class='subtle'>Workflow chart unavailable for current roles.</p>";
+              chartMsg("");
+              return;
+            }
+            throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+          }
+          const rows = Array.isArray(data.data) ? data.data : [];
+          const maxCount = Math.max(1, ...rows.map((r) => Number(r.count || 0)));
+          container.innerHTML = "";
+          for (const row of rows) {
+            const label = String(row.stage || "");
+            const count = Number(row.count || 0);
+            const widthPct = Math.round((count / maxCount) * 100);
+            const div = document.createElement("div");
+            div.className = "chart-row";
+            div.innerHTML = `
+              <div>${label}</div>
+              <div class="chart-track"><div class="chart-bar" style="width:${widthPct}%;"></div></div>
+              <div class="chart-value">${count}</div>
+            `;
+            container.appendChild(div);
+          }
+          chartMsg(`Total selected red flags: ${Number(data.total || 0)}`);
+        } catch (e) {
+          chartMsg(`Workflow chart load failed: ${e.message}`, true);
+        }
+      }
+      async function loadBusinessUnits() {
+        businessUnits = await call("/api/red-flags/business-units", "GET");
+        populateBusinessUnits();
+      }
+      async function loadCatalogFilters() {
+        const data = await call("/api/red-flags/catalog-filters", "GET");
+        fillSelect("catalogSource", data.sources || []);
+        fillSelect("catalogCategory", data.categories || []);
+        fillSelect("catalogProduct", data.products || []);
+        fillSelect("catalogService", data.services || []);
+      }
+      function readCatalogParams() {
+        return {
+          business_unit_id: Number(el("catalogBusinessUnit").value || 0),
+          source_name: String(el("catalogSource").value || "").trim(),
+          category: String(el("catalogCategory").value || "").trim(),
+          product: String(el("catalogProduct").value || "").trim(),
+          service: String(el("catalogService").value || "").trim(),
+          q: String(el("catalogQuery").value || "").trim(),
+          limit: Number(el("catalogLimit").value || 10)
+        };
+      }
+      function applyTerminalStatesFromData(data) {
+        const terms = (data && data.workflow && Array.isArray(data.workflow.terminal_states)) ? data.workflow.terminal_states : [];
+        if (terms.length) {
+          terminalStates = terms;
+        }
+      }
+      function renderCatalogRows(catalog) {
+        const tbody = el("catalogRows");
+        tbody.innerHTML = "";
+        for (const row of catalog.data || []) {
+          const tr = document.createElement("tr");
+          const sourcePill = row.flag_source === "tenant" ? "tenant" : "shared";
+          tr.innerHTML = `
+            <td>${row.id || ""}</td>
+            <td><span class="pill">${sourcePill}</span>${row.source_name ? `<div class="subtle">${row.source_name}</div>` : ""}</td>
+            <td>${row.category || ""}</td>
+            <td>${row.severity || ""}</td>
+            <td>${shortText(row.text, 120)}</td>
+            <td>${(row.product_tags || []).join(", ")}</td>
+            <td>${(row.service_tags || []).join(", ")}</td>
+            <td></td>
+          `;
+          const actionCell = tr.children[7];
+          const wrap = document.createElement("div");
+          wrap.className = "catalog-actions";
+          if (row.already_selected) {
+            const sp = document.createElement("span");
+            sp.className = "pill";
+            const status = row.existing_selection_approval_status ? ` (${row.existing_selection_approval_status})` : "";
+            sp.textContent = `Already selected${status}`;
+            wrap.appendChild(sp);
+          } else {
+            const b = document.createElement("button");
+            b.textContent = "Add Red Flag";
+            b.onclick = () => addCatalogFlag(row.shared_red_flag_id, row.tenant_red_flag_id);
+            wrap.appendChild(b);
+          }
+          actionCell.appendChild(wrap);
+          tbody.appendChild(tr);
+        }
+        if (!catalog.data || !catalog.data.length) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td colspan="8">No catalog rows found.</td>`;
+          tbody.appendChild(tr);
+        }
+      }
+      function renderCatalogData(data) {
+        const params = readCatalogParams();
+        const catalog = (data && data.catalog) ? data.catalog : { total: 0, data: [] };
+        catalogTotal = Number(catalog.total || 0);
+        renderCatalogRows(catalog);
+        const pageStart = catalogTotal ? (catalogOffset + 1) : 0;
+        const pageEnd = Math.min(catalogOffset + params.limit, catalogTotal);
+        const assistantNote = (Array.isArray(assistantCatalogIds) && assistantCatalogIds.length)
+          ? ` | Assistant filter active (${assistantCatalogIds.length} ids)`
+          : "";
+        el("catalogInfo").textContent = `Showing ${pageStart}-${pageEnd} of ${catalogTotal} catalog red flags${assistantNote}`;
+      }
+      function renderWorkspaceSections(data) {
+        const inFlight = (data && data.in_flight && Array.isArray(data.in_flight.data)) ? data.in_flight.data : [];
+        const completed = (data && data.completed && Array.isArray(data.completed.data)) ? data.completed.data : [];
+        renderSelectionRows("inFlightRows", inFlight, true);
+        renderSelectionRows("completedRows", completed, false);
+        const inFlightTotal = (data && data.in_flight && Number(data.in_flight.total)) || inFlight.length;
+        const completedTotal = (data && data.completed && Number(data.completed.total)) || completed.length;
+        el("inFlightInfo").textContent = `In-flight items: ${inFlightTotal}`;
+        el("completedInfo").textContent = `Completed items: ${completedTotal}`;
+      }
+      async function refreshWorkspaceData(includeCatalog = false, resetOffset = false) {
+        const params = readCatalogParams();
+        if (includeCatalog && !params.business_unit_id) {
+          el("catalogRows").innerHTML = `<tr><td colspan="8">Select a business unit to load catalog rows.</td></tr>`;
+          el("catalogInfo").textContent = "";
+          includeCatalog = false;
+        }
+        if (resetOffset) catalogOffset = 0;
+        const query = buildWorkspaceDataQuery(includeCatalog);
+        const data = await call("/api/red-flags/workspace-data?" + query.toString(), "GET");
+        applyTerminalStatesFromData(data);
+        if (includeCatalog) {
+          renderCatalogData(data);
+        }
+        renderWorkspaceSections(data);
+      }
+      async function loadCatalog(resetOffset = false) {
+        if (!isCatalogVisible()) return;
+        try {
+          await refreshWorkspaceData(true, resetOffset);
+        } catch (e) {
+          msg(`Catalog load failed: ${e.message}`, true);
+        }
+      }
+      async function addCatalogFlag(sharedRedFlagId, tenantRedFlagId) {
+        try {
+          const businessUnitId = Number(el("catalogBusinessUnit").value || 0);
+          if (!businessUnitId) {
+            msg("Select a business unit to add from catalog.", true);
+            return;
+          }
+          const payload = { business_unit_id: businessUnitId, relevance_status: "needs_review", rationale: null };
+          if (sharedRedFlagId) payload.shared_red_flag_id = Number(sharedRedFlagId);
+          else if (tenantRedFlagId) payload.tenant_red_flag_id = Number(tenantRedFlagId);
+          else throw new Error("Catalog row missing red flag id.");
+          await call("/api/red-flags/selections", "POST", payload);
+          msg("Selection added.");
+          await refreshWorkspaceData(true, false);
+        } catch (e) {
+          msg(`Add from catalog failed: ${e.message}`, true);
+        }
+      }
+      async function prevCatalogPage() {
+        const limit = Number(el("catalogLimit").value || 10);
+        catalogOffset = Math.max(0, catalogOffset - limit);
+        await loadCatalog();
+      }
+      async function nextCatalogPage() {
+        const limit = Number(el("catalogLimit").value || 10);
+        if (catalogOffset + limit >= catalogTotal) return;
+        catalogOffset += limit;
+        await loadCatalog();
+      }
+      function resetCatalogFilters() {
+        el("catalogSource").value = "";
+        el("catalogCategory").value = "";
+        el("catalogProduct").value = "";
+        el("catalogService").value = "";
+        el("catalogQuery").value = "";
+        el("catalogLimit").value = "10";
+        assistantCatalogIds = [];
+        catalogOffset = 0;
+        loadCatalog(true);
+      }
+      async function rowAction(id, action) {
+        const comment = window.prompt(`Comment for ${action} (optional):`, "");
+        await call(`/api/red-flags/selections/${id}/${action}`, "POST", { comment: comment || null });
+      }
+      async function deleteSelection(id) {
+        if (!window.confirm(`Logical delete selection ${id}?`)) return;
+        await call(`/api/red-flags/selections/${id}`, "DELETE");
+      }
+      async function quickUpdate(id, current) {
+        const relevance = window.prompt("Set relevance_status (in_scope|out_of_scope|needs_review):", current || "needs_review");
+        if (!relevance) return;
+        const rationale = window.prompt("Rationale (optional):", "");
+        await call(`/api/red-flags/selections/${id}`, "PATCH", { relevance_status: relevance, rationale: rationale || null });
+      }
+      async function openAuditTrail(selectionId) {
+        try {
+          el("auditTitle").textContent = `Selection Audit Trail #${selectionId}`;
+          const data = await call(`/api/red-flags/selections/${selectionId}/audit-trail`, "GET");
+          const rows = Array.isArray(data.data) ? data.data : [];
+          const tbody = el("auditRows");
+          tbody.innerHTML = "";
+          for (const row of rows) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${row.user || ""}</td>
+              <td>${formatTimestamp(row.timestamp)}</td>
+              <td>${row.action_description || row.action || ""}</td>
+              <td>${row.comment || ""}</td>
+            `;
+            tbody.appendChild(tr);
+          }
+          if (!rows.length) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td colspan="4">No audit history found for this selection.</td>`;
+            tbody.appendChild(tr);
+          }
+          el("auditModal").classList.add("open");
+        } catch (e) {
+          msg(`Audit trail load failed: ${e.message}`, true);
+        }
+      }
+      function closeAuditModal() {
+        el("auditModal").classList.remove("open");
+      }
+      function renderSelectionRows(targetBodyId, rows, includeActions) {
+        const tbody = el(targetBodyId);
+        tbody.innerHTML = "";
+        for (const row of rows) {
+          const isShared = row.shared_red_flag_id != null;
+          const source = isShared ? "shared" : "tenant";
+          const flagRef = isShared ? `RF-${row.shared_red_flag_id}` : `TRF-${row.tenant_red_flag_id || "?"}`;
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><a href="#" class="id-link" onclick="openAuditTrail(${row.id}); return false;" title="Selection ${row.id}">${flagRef}</a></td>
+            <td>${row.business_unit_code || row.business_unit_id}</td>
+            <td><span class="pill">${source}</span></td>
+            <td>${shortText(row.red_flag_text, 74)}</td>
+            <td>${row.relevance_status}</td>
+            <td><span class="status ${row.approval_status}">${row.approval_status}</span></td>
+            <td>${row.rationale || ""}</td>
+            ${includeActions ? "<td></td>" : `<td>${formatTimestamp(row.submitted_at || "")}</td><td>${formatTimestamp(row.approved_at || "")}</td>`}
+          `;
+          if (includeActions) {
+            const actions = document.createElement("div");
+            actions.className = "actions";
+            const allowedActions = Array.isArray(row.allowed_actions) ? row.allowed_actions : [];
+            for (const allowed of allowedActions) {
+              const actionCode = String(allowed.action || "").trim();
+              const label = String(allowed.label || actionCode || "").trim() || actionCode;
+              const b = document.createElement("button");
+              b.textContent = label;
+              if (actionCode === "reject" || actionCode === "delete") b.className = "danger";
+              if (actionCode === "return" || actionCode === "edit") b.className = "secondary";
+              b.onclick = async () => {
+                try {
+                  if (actionCode === "edit") {
+                    await quickUpdate(row.id, row.relevance_status);
+                  } else if (actionCode === "delete") {
+                    await deleteSelection(row.id);
+                  } else {
+                    await rowAction(row.id, actionCode);
+                  }
+                  msg(`Selection ${row.id} updated via ${actionCode}.`);
+                  await refreshWorkspaceData(false, false);
+                } catch (err) {
+                  msg(`Action failed: ${err.message}`, true);
+                }
+              };
+              actions.appendChild(b);
+            }
+            if (!actions.children.length) {
+              const s = document.createElement("span");
+              s.className = "subtle";
+              s.textContent = "No actions";
+              actions.appendChild(s);
+            }
+            tr.children[7].appendChild(actions);
+          }
+          tbody.appendChild(tr);
+        }
+        if (!rows.length) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = includeActions
+            ? `<td colspan="8">No rows in this section.</td>`
+            : `<td colspan="9">No rows in this section.</td>`;
+          tbody.appendChild(tr);
+        }
+      }
+      async function initPage() {
+        try {
+          await loadWorkflowSummaryChart();
+          await loadWorkspacePolicy();
+          await loadBusinessUnits();
+          if (isCatalogVisible()) {
+            await loadCatalogFilters();
+            appendAssistantMessage("bot", "Tell me about your institution and business unit context. I will suggest relevant red flags from the catalog only.");
+            await loadAssistantSeedQuestions();
+          }
+          await refreshWorkspaceData(isCatalogVisible(), true);
+        } catch (e) {
+          msg(`Workspace init failed: ${e.message}`, true);
+        }
+      }
+      el("catalogBusinessUnit").addEventListener("change", async () => {
+        if (!isCatalogVisible()) return;
+        assistantCatalogIds = [];
+        if (el("assistantInfo")) el("assistantInfo").textContent = "";
+        await loadAssistantSeedQuestions();
+        await loadCatalog(true);
+      });
+      initPage();
+    </script>
+  </body>
+</html>

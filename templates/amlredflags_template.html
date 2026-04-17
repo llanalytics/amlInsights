@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background: linear-gradient(130deg, #edf3fb, #f8efe7);
+        color: #1f2933;
+      }
+      main {
+        max-width: 900px;
+        margin: 8vh auto;
+        padding: 2rem;
+        background: rgba(255, 255, 255, 0.94);
+        border-radius: 16px;
+        box-shadow: 0 16px 40px rgba(31, 41, 51, 0.14);
+      }
+      h1 { margin-top: 0; }
+      ul { line-height: 1.7; }
+      a { color: #1f5f8b; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>AML Red Flags Template</h1>
+      <p>Signed in as <strong>{{ user }}</strong>. Tenant red-flag workflow lives in amlInsights.</p>
+      <p><a href="/dashboard">Back to dashboard</a></p>
+
+      <h3>Workflow Pages</h3>
+      <ul>
+        {% if has_red_flag_analyst or has_red_flag_approver or has_read_only_audit %}
+        <li><a href="/ui/red-flags/workspace">Red Flags Unified Workspace (All)</a></li>
+        {% endif %}
+        {% if has_red_flag_analyst %}
+        <li><a href="/ui/red-flags/workspace?view=selections">Red Flag Analyst View</a></li>
+        {% endif %}
+        {% if has_red_flag_approver %}
+        <li><a href="/ui/red-flags/workspace?view=approvals&status=pending_approval">Red Flag Approver View</a></li>
+        {% endif %}
+        {% if has_read_only_audit %}
+        <li><a href="/ui/red-flags/workspace?view=audit">Red Flag Audit View</a></li>
+        {% endif %}
+      </ul>
+
+      {% if is_platform_admin %}
+      <h3>Platform Admin</h3>
+      <ul>
+        <li><a href="/ui/admin/red-flags-curation">Shared Red Flags Curation</a></li>
+        <li><a href="/ui/admin/red-flag-synonyms">Red Flag Synonyms Management</a></li>
+      </ul>
+      {% endif %}
+    </main>
+  </body>
+</html>

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+      :root {
+        --bg-a: #edf3fb;
+        --bg-b: #f8efe7;
+        --ink: #13212f;
+        --brand: #1f5f8b;
+        --panel: rgba(255, 255, 255, 0.95);
+        --danger: #8b1f1f;
+      }
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background: linear-gradient(130deg, var(--bg-a), var(--bg-b));
+        color: var(--ink);
+      }
+      main {
+        max-width: 1200px;
+        margin: 2rem auto;
+        padding: 1rem;
+      }
+      .panel {
+        background: var(--panel);
+        border-radius: 14px;
+        box-shadow: 0 14px 32px rgba(20, 34, 49, 0.14);
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      details.panel {
+        padding: 0;
+        overflow: hidden;
+      }
+      .accordion-title {
+        list-style: none;
+        cursor: pointer;
+        padding: 1rem;
+        font-weight: 700;
+        border-bottom: 1px solid #d8e1e9;
+        user-select: none;
+      }
+      .accordion-title::-webkit-details-marker { display: none; }
+      .accordion-title::after {
+        content: "▾";
+        float: right;
+        color: #4d6478;
+      }
+      details.panel:not([open]) .accordion-title { border-bottom: none; }
+      details.panel:not([open]) .accordion-title::after { content: "▸"; }
+      .accordion-body { padding: 1rem; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(170px, 1fr));
+        gap: 0.7rem;
+      }
+      label { display: block; font-size: 0.9rem; }
+      input, select, button, textarea {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 0.2rem;
+        padding: 0.55rem;
+        border-radius: 8px;
+        border: 1px solid #b6c7d6;
+        font-family: inherit;
+      }
+      textarea { min-height: 76px; }
+      textarea.tags { min-height: 58px; }
+      button {
+        background: var(--brand);
+        color: #fff;
+        border: none;
+        cursor: pointer;
+      }
+      button.danger { background: var(--danger); }
+      table { width: 100%; border-collapse: collapse; }
+      th, td {
+        text-align: left;
+        border-bottom: 1px solid #d7e0e8;
+        padding: 0.45rem;
+        vertical-align: top;
+        font-size: 0.93rem;
+      }
+      .msg { font-size: 0.95rem; min-height: 1.2rem; color: var(--brand); }
+      .actions { display: flex; gap: 0.4rem; }
+      .actions button { width: auto; }
+      @media (max-width: 920px) {
+        .grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="panel">
+        <h1>Red Flags Curation</h1>
+        <p>Signed in as <strong>{{ user }}</strong>. This page is available only to platform admins.</p>
+        <p><a href="/dashboard">Back to dashboard</a></p>
+      </div>
+
+      <details class="panel" open>
+        <summary class="accordion-title">Filters</summary>
+        <div class="accordion-body">
+        <div class="grid">
+          <label>Search
+            <input id="search" placeholder="text or category">
+          </label>
+          <label>Category
+            <input id="categoryFilter" placeholder="optional">
+          </label>
+          <label>Severity
+            <input id="severityFilter" placeholder="optional">
+          </label>
+          <label>Limit
+            <input id="limit" type="number" min="1" max="1000" value="20">
+          </label>
+        </div>
+        <div style="margin-top:0.7rem;">
+          <button onclick="loadRows()">Refresh List</button>
+        </div>
+        <div id="message" class="msg"></div>
+        </div>
+      </details>
+
+      <details class="panel">
+        <summary class="accordion-title">Create Shared Red Flag</summary>
+        <div class="accordion-body">
+        <div class="grid">
+          <label>Document ID
+            <input id="createDocumentId" type="number" min="0" value="0">
+          </label>
+          <label>Category
+            <input id="createCategory" required>
+          </label>
+          <label>Severity
+            <input id="createSeverity" required>
+          </label>
+          <label>Confidence Score
+            <input id="createConfidence" type="number" min="0" max="100" placeholder="optional">
+          </label>
+          <label>Product Tags (comma-separated)
+            <textarea class="tags" id="createProductTags" placeholder="wire&#10;cash&#10;trade-finance"></textarea>
+          </label>
+          <label>Service Tags (comma-separated)
+            <textarea class="tags" id="createServiceTags" placeholder="payments&#10;retail-banking"></textarea>
+          </label>
+        </div>
+        <label style="margin-top:0.7rem;">Text
+          <textarea id="createText" required></textarea>
+        </label>
+        <div style="margin-top:0.7rem;">
+          <button onclick="createRow()">Create Red Flag</button>
+        </div>
+        </div>
+      </details>
+
+      <details class="panel">
+        <summary class="accordion-title">Shared Red Flags</summary>
+        <div class="accordion-body">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Category</th>
+              <th>Severity</th>
+              <th>Confidence</th>
+              <th>Product Tags</th>
+              <th>Service Tags</th>
+              <th>Text</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        </div>
+      </details>
+    </main>
+
+    <script>
+      function el(id) { return document.getElementById(id); }
+      function msg(text, bad = false) {
+        const m = el("message");
+        m.textContent = text || "";
+        m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      async function call(path, method = "GET", body = null) {
+        const res = await fetch(path, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: body ? JSON.stringify(body) : null
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+        }
+        return data;
+      }
+      function q() {
+        const p = new URLSearchParams();
+        const search = el("search").value.trim();
+        const category = el("categoryFilter").value.trim();
+        const severity = el("severityFilter").value.trim();
+        const limit = el("limit").value.trim() || "20";
+        if (search) p.set("search", search);
+        if (category) p.set("category", category);
+        if (severity) p.set("severity", severity);
+        p.set("limit", limit);
+        return p.toString();
+      }
+      function esc(v) {
+        return String(v || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+      function splitCsv(v) {
+        const raw = String(v || "");
+        const parts = raw
+          .split(/[,;\n\r]+/g)
+          .map(s => s.trim())
+          .filter(Boolean);
+        const out = [];
+        const seen = new Set();
+        for (const p of parts) {
+          const k = p.toLowerCase();
+          if (seen.has(k)) continue;
+          seen.add(k);
+          out.push(p);
+        }
+        return out;
+      }
+      function joinCsv(v) {
+        if (!Array.isArray(v)) return "";
+        return v.join(", ");
+      }
+      async function loadRows() {
+        try {
+          msg("Loading...");
+          const data = await call("/api/admin/red-flags?" + q());
+          const rows = data.data || [];
+          const body = el("rows");
+          body.innerHTML = "";
+          for (const r of rows) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${r.id}</td>
+              <td><input id="cat-${r.id}" value="${esc(r.category)}"></td>
+              <td><input id="sev-${r.id}" value="${esc(r.severity)}"></td>
+              <td><input id="conf-${r.id}" type="number" min="0" max="100" value="${r.confidence_score ?? ""}"></td>
+              <td><textarea class="tags" id="pt-${r.id}">${esc(joinCsv(r.product_tags || []))}</textarea></td>
+              <td><textarea class="tags" id="st-${r.id}">${esc(joinCsv(r.service_tags || []))}</textarea></td>
+              <td><textarea id="txt-${r.id}">${esc(r.text)}</textarea></td>
+              <td>
+                <div class="actions">
+                  <button onclick="updateRow(${r.id})">Save</button>
+                  <button class="danger" onclick="deleteRow(${r.id})">Delete</button>
+                </div>
+              </td>
+            `;
+            body.appendChild(tr);
+          }
+          msg(`Loaded ${rows.length} red flags.`);
+        } catch (err) {
+          msg("Load failed: " + err.message, true);
+        }
+      }
+      async function createRow() {
+        const payload = {
+          document_id: Number(el("createDocumentId").value || 0),
+          category: el("createCategory").value.trim(),
+          severity: el("createSeverity").value.trim(),
+          text: el("createText").value.trim(),
+          confidence_score: el("createConfidence").value.trim() ? Number(el("createConfidence").value.trim()) : null,
+          product_tags: splitCsv(el("createProductTags").value),
+          service_tags: splitCsv(el("createServiceTags").value)
+        };
+        if (!payload.category || !payload.severity || !payload.text) {
+          msg("Category, severity, and text are required.", true);
+          return;
+        }
+        try {
+          await call("/api/admin/red-flags", "POST", payload);
+          el("createCategory").value = "";
+          el("createSeverity").value = "";
+          el("createText").value = "";
+          el("createConfidence").value = "";
+          el("createProductTags").value = "";
+          el("createServiceTags").value = "";
+          msg("Red flag created.");
+          await loadRows();
+        } catch (err) {
+          msg("Create failed: " + err.message, true);
+        }
+      }
+      async function updateRow(id) {
+        const payload = {
+          category: el(`cat-${id}`).value.trim(),
+          severity: el(`sev-${id}`).value.trim(),
+          text: el(`txt-${id}`).value.trim(),
+          confidence_score: el(`conf-${id}`).value.trim() ? Number(el(`conf-${id}`).value.trim()) : null,
+          product_tags: splitCsv(el(`pt-${id}`).value),
+          service_tags: splitCsv(el(`st-${id}`).value)
+        };
+        try {
+          await call(`/api/admin/red-flags/${id}`, "PATCH", payload);
+          msg(`Updated red flag #${id}.`);
+          await loadRows();
+        } catch (err) {
+          msg("Update failed: " + err.message, true);
+        }
+      }
+      async function deleteRow(id) {
+        if (!confirm(`Delete red flag #${id}?`)) return;
+        try {
+          await call(`/api/admin/red-flags/${id}`, "DELETE");
+          msg(`Deleted red flag #${id}.`);
+          await loadRows();
+        } catch (err) {
+          msg("Delete failed: " + err.message, true);
+        }
+      }
+      loadRows();
+    </script>
+  </body>
+</html>

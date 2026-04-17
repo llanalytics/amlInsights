@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+      :root {
+        --bg-a: #edf3fb;
+        --bg-b: #f8efe7;
+        --ink: #13212f;
+        --brand: #1f5f8b;
+        --panel: rgba(255, 255, 255, 0.95);
+      }
+      body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: linear-gradient(130deg, var(--bg-a), var(--bg-b)); color: var(--ink); }
+      main { max-width: 1200px; margin: 2rem auto; padding: 1rem; }
+      .panel { background: var(--panel); border-radius: 14px; box-shadow: 0 14px 32px rgba(20, 34, 49, 0.14); padding: 1rem; margin-bottom: 1rem; }
+      details.panel { padding: 0; overflow: hidden; }
+      .accordion-title {
+        list-style: none;
+        cursor: pointer;
+        padding: 1rem;
+        font-weight: 700;
+        border-bottom: 1px solid #d8e1e9;
+        user-select: none;
+      }
+      .accordion-title::-webkit-details-marker { display: none; }
+      .accordion-title::after {
+        content: "▾";
+        float: right;
+        color: #4d6478;
+      }
+      details.panel:not([open]) .accordion-title { border-bottom: none; }
+      details.panel:not([open]) .accordion-title::after { content: "▸"; }
+      .accordion-body { padding: 1rem; }
+      .grid { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 0.7rem; }
+      label { display: block; font-size: 0.9rem; }
+      input, select, button { width: 100%; box-sizing: border-box; margin-top: 0.2rem; padding: 0.55rem; border-radius: 8px; border: 1px solid #b6c7d6; font-family: inherit; }
+      button { background: var(--brand); color: #fff; border: none; cursor: pointer; }
+      button.danger { background: #8b1f1f; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; border-bottom: 1px solid #d7e0e8; padding: 0.45rem; vertical-align: top; font-size: 0.93rem; }
+      .msg { font-size: 0.95rem; min-height: 1.2rem; color: var(--brand); }
+      @media (max-width: 920px) { .grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="panel">
+        <h1>Red Flag Synonyms</h1>
+        <p>Signed in as <strong>{{ user }}</strong>. This page is available only to platform admins.</p>
+        <p><a href="/dashboard">Back to dashboard</a> | <a href="/ui/admin/red-flags-curation">Back to red flags curation</a></p>
+      </div>
+
+      <details class="panel" open>
+        <summary class="accordion-title">Add / Update Synonym Mapping</summary>
+        <div class="accordion-body">
+        <div class="grid">
+          <label>Scope
+            <select id="scope">
+              <option value="category">category</option>
+              <option value="product">product</option>
+              <option value="service">service</option>
+            </select>
+          </label>
+          <label>Raw Value
+            <input id="rawValue" placeholder="value from model output">
+          </label>
+          <label>Canonical Value
+            <input id="canonicalValue" placeholder="approved value to store">
+          </label>
+          <label>Apply to Existing Rows
+            <select id="applyExisting">
+              <option value="true">yes</option>
+              <option value="false">no</option>
+            </select>
+          </label>
+        </div>
+        <div style="margin-top:0.7rem;">
+          <button onclick="upsertMapping()">Save Mapping</button>
+        </div>
+        <div id="message" class="msg"></div>
+        </div>
+      </details>
+
+      <details class="panel">
+        <summary class="accordion-title">Unmapped Raw Values (Currently on other_*)</summary>
+        <div class="accordion-body">
+        <div class="grid" style="margin-bottom:0.7rem;">
+          <label>Scope
+            <select id="candidateScope" onchange="resetCandidates()">
+              <option value="category">category</option>
+              <option value="product">product</option>
+              <option value="service">service</option>
+            </select>
+          </label>
+          <label>Page Size
+            <input id="candidateLimit" type="number" min="1" max="500" value="10" onchange="resetCandidates()">
+          </label>
+        </div>
+        <div style="margin-bottom:0.7rem; display:flex; gap:0.5rem; align-items:center;">
+          <button onclick="loadCandidates()">Refresh Unmapped Values</button>
+          <button id="candidatePrev" onclick="pageCandidates(-1)">Prev</button>
+          <button id="candidateNext" onclick="pageCandidates(1)">Next</button>
+          <input id="candidatePageNumber" type="number" min="1" value="1" style="width:90px;" onchange="gotoCandidatesPage()">
+          <button onclick="gotoCandidatesPage()" style="width:auto;">Go</button>
+          <span id="candidatePageInfo"></span>
+        </div>
+        <table>
+          <thead><tr><th>Scope</th><th>Raw Value</th><th>Count</th><th>Canonical Value</th><th>Map</th></tr></thead>
+          <tbody id="candidates"></tbody>
+        </table>
+        </div>
+      </details>
+
+      <details class="panel">
+        <summary class="accordion-title">Existing Mappings</summary>
+        <div class="accordion-body">
+        <div class="grid" style="margin-bottom:0.7rem;">
+          <label>Page Size
+            <input id="mappingLimit" type="number" min="1" max="500" value="10" onchange="resetMappings()">
+          </label>
+        </div>
+        <div style="margin-bottom:0.7rem; display:flex; gap:0.5rem; align-items:center;">
+          <button onclick="loadMappings()">Refresh Mappings</button>
+          <button id="mappingPrev" onclick="pageMappings(-1)">Prev</button>
+          <button id="mappingNext" onclick="pageMappings(1)">Next</button>
+          <input id="mappingPageNumber" type="number" min="1" value="1" style="width:90px;" onchange="gotoMappingsPage()">
+          <button onclick="gotoMappingsPage()" style="width:auto;">Go</button>
+          <span id="mappingPageInfo"></span>
+        </div>
+        <table>
+          <thead><tr><th>ID</th><th>Scope</th><th>Raw Value</th><th>Canonical Value</th><th>Active</th><th>Actions</th></tr></thead>
+          <tbody id="mappings"></tbody>
+        </table>
+        </div>
+      </details>
+    </main>
+
+    <script>
+      let mappingsOffset = 0;
+      let mappingsTotal = 0;
+      let candidatesOffset = 0;
+      let candidatesTotal = 0;
+
+      function el(id) { return document.getElementById(id); }
+      function msg(text, bad = false) { const m = el("message"); m.textContent = text || ""; m.style.color = bad ? "#8b1f1f" : "#1f5f8b"; }
+      function esc(v) { return String(v || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
+
+      async function call(path, method = "GET", body = null) {
+        const res = await fetch(path, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: body ? JSON.stringify(body) : null,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+        return data;
+      }
+
+      async function loadMappings() {
+        try {
+          const limit = Number(el("mappingLimit").value || 10);
+          const data = await call(`/api/admin/red-flag-synonyms?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(mappingsOffset)}`);
+          mappingsTotal = Number(data.total || 0);
+          const body = el("mappings");
+          body.innerHTML = "";
+          for (const r of (data.data || [])) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${r.id}</td>
+              <td>
+                <select id="scope-${r.id}">
+                  <option value="category" ${r.scope === "category" ? "selected" : ""}>category</option>
+                  <option value="product" ${r.scope === "product" ? "selected" : ""}>product</option>
+                  <option value="service" ${r.scope === "service" ? "selected" : ""}>service</option>
+                </select>
+              </td>
+              <td><input id="raw-${r.id}" value="${esc(r.raw_value)}"></td>
+              <td><input id="canon-${r.id}" value="${esc(r.canonical_value)}"></td>
+              <td><input id="active-${r.id}" type="checkbox" ${r.is_active ? "checked" : ""}></td>
+              <td>
+                <button onclick="saveMapping(${r.id})">Save</button>
+                <button class="danger" onclick="deleteMapping(${r.id})">Delete</button>
+              </td>
+            `;
+            body.appendChild(tr);
+          }
+          const shownFrom = mappingsTotal ? (mappingsOffset + 1) : 0;
+          const shownTo = Math.min(mappingsOffset + (data.data || []).length, mappingsTotal);
+          const totalPages = Math.max(1, Math.ceil(mappingsTotal / limit));
+          const currentPage = Math.floor(mappingsOffset / limit) + 1;
+          el("mappingPageInfo").textContent = `Showing ${shownFrom}-${shownTo} of ${mappingsTotal} (Page ${currentPage}/${totalPages})`;
+          el("mappingPageNumber").value = String(currentPage);
+          el("mappingPageNumber").max = String(totalPages);
+          el("mappingPrev").disabled = mappingsOffset <= 0;
+          el("mappingNext").disabled = mappingsOffset + limit >= mappingsTotal;
+        } catch (err) {
+          msg("Failed loading mappings: " + err.message, true);
+        }
+      }
+
+      function resetMappings() {
+        mappingsOffset = 0;
+        loadMappings();
+      }
+
+      function pageMappings(direction) {
+        const limit = Number(el("mappingLimit").value || 10);
+        const next = mappingsOffset + (direction * limit);
+        if (next < 0) return;
+        if (direction > 0 && next >= mappingsTotal) return;
+        mappingsOffset = next;
+        loadMappings();
+      }
+
+      function gotoMappingsPage() {
+        const limit = Number(el("mappingLimit").value || 10);
+        const totalPages = Math.max(1, Math.ceil(mappingsTotal / limit));
+        let page = Number(el("mappingPageNumber").value || 1);
+        if (!Number.isFinite(page)) page = 1;
+        page = Math.max(1, Math.min(totalPages, Math.floor(page)));
+        mappingsOffset = (page - 1) * limit;
+        loadMappings();
+      }
+
+      async function saveMapping(id) {
+        const payload = {
+          scope: el(`scope-${id}`).value,
+          raw_value: el(`raw-${id}`).value.trim(),
+          canonical_value: el(`canon-${id}`).value.trim(),
+          is_active: !!el(`active-${id}`).checked,
+          apply_existing: true
+        };
+        if (!payload.raw_value || !payload.canonical_value) {
+          msg("Raw value and canonical value are required.", true);
+          return;
+        }
+        try {
+          const res = await call(`/api/admin/red-flag-synonyms/${id}`, "PATCH", payload);
+          msg(`Mapping #${id} updated. Existing rows updated: ${res.updated_existing_rows}`);
+          await loadMappings();
+          await loadCandidates();
+        } catch (err) {
+          msg("Update failed: " + err.message, true);
+        }
+      }
+
+      async function deleteMapping(id) {
+        if (!confirm(`Delete mapping #${id}?`)) return;
+        try {
+          await call(`/api/admin/red-flag-synonyms/${id}`, "DELETE");
+          msg(`Mapping #${id} deleted.`);
+          await loadMappings();
+          await loadCandidates();
+        } catch (err) {
+          msg("Delete failed: " + err.message, true);
+        }
+      }
+
+      async function loadCandidates() {
+        const scope = el("candidateScope").value;
+        const limit = Number(el("candidateLimit").value || 10);
+        const body = el("candidates");
+        body.innerHTML = "";
+        try {
+          const data = await call(`/api/admin/red-flag-synonyms/candidates?scope=${encodeURIComponent(scope)}&limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(candidatesOffset)}`);
+          candidatesTotal = Number(data.total || 0);
+          let rowNum = 0;
+          for (const c of (data.data || [])) {
+            rowNum += 1;
+            const inputId = `cand-canon-${rowNum}`;
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td>${esc(scope)}</td><td>${esc(c.raw_value)}</td><td>${c.count}</td><td><input id="${inputId}" placeholder="canonical_value"></td><td><button>Map</button></td>`;
+            const mapButton = tr.querySelector("button");
+            mapButton.addEventListener("click", async () => {
+              const canonicalInput = el(inputId);
+              const canonical = canonicalInput ? canonicalInput.value.trim() : "";
+              if (!canonical) {
+                msg("Canonical value is required before mapping.", true);
+                return;
+              }
+              try {
+                const res = await call("/api/admin/red-flag-synonyms", "POST", {
+                  scope,
+                  raw_value: String(c.raw_value || ""),
+                  canonical_value: canonical,
+                  apply_existing: true
+                });
+                msg(`Mapped ${scope} value "${String(c.raw_value || "")}". Existing rows updated: ${res.updated_existing_rows}`);
+                await loadCandidates();
+                await loadMappings();
+              } catch (err) {
+                msg("Mapping failed: " + err.message, true);
+              }
+            });
+            body.appendChild(tr);
+          }
+          if (!body.children.length) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td colspan="5">No current fallback candidates found.</td>`;
+            body.appendChild(tr);
+          }
+          const shownFrom = candidatesTotal ? (candidatesOffset + 1) : 0;
+          const shownTo = Math.min(candidatesOffset + (data.data || []).length, candidatesTotal);
+          const totalPages = Math.max(1, Math.ceil(candidatesTotal / limit));
+          const currentPage = Math.floor(candidatesOffset / limit) + 1;
+          el("candidatePageInfo").textContent = `Showing ${shownFrom}-${shownTo} of ${candidatesTotal} (Page ${currentPage}/${totalPages})`;
+          el("candidatePageNumber").value = String(currentPage);
+          el("candidatePageNumber").max = String(totalPages);
+          el("candidatePrev").disabled = candidatesOffset <= 0;
+          el("candidateNext").disabled = candidatesOffset + limit >= candidatesTotal;
+        } catch (err) {
+          msg("Failed loading candidates: " + err.message, true);
+        }
+      }
+
+      function resetCandidates() {
+        candidatesOffset = 0;
+        loadCandidates();
+      }
+
+      function pageCandidates(direction) {
+        const limit = Number(el("candidateLimit").value || 10);
+        const next = candidatesOffset + (direction * limit);
+        if (next < 0) return;
+        if (direction > 0 && next >= candidatesTotal) return;
+        candidatesOffset = next;
+        loadCandidates();
+      }
+
+      function gotoCandidatesPage() {
+        const limit = Number(el("candidateLimit").value || 10);
+        const totalPages = Math.max(1, Math.ceil(candidatesTotal / limit));
+        let page = Number(el("candidatePageNumber").value || 1);
+        if (!Number.isFinite(page)) page = 1;
+        page = Math.max(1, Math.min(totalPages, Math.floor(page)));
+        candidatesOffset = (page - 1) * limit;
+        loadCandidates();
+      }
+
+      async function upsertMapping() {
+        const payload = {
+          scope: el("scope").value,
+          raw_value: el("rawValue").value.trim(),
+          canonical_value: el("canonicalValue").value.trim(),
+          apply_existing: el("applyExisting").value === "true",
+        };
+        if (!payload.raw_value || !payload.canonical_value) {
+          msg("Raw value and canonical value are required.", true);
+          return;
+        }
+        try {
+          const res = await call("/api/admin/red-flag-synonyms", "POST", payload);
+          msg(`Saved mapping. Updated existing rows: ${res.updated_existing_rows}`);
+          await loadMappings();
+          await loadCandidates();
+        } catch (err) {
+          msg("Save failed: " + err.message, true);
+        }
+      }
+
+      loadMappings();
+      loadCandidates();
+    </script>
+  </body>
+</html>

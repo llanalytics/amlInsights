@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import MetaData, create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 
@@ -14,10 +14,17 @@ def get_database_url() -> str:
 
 
 DATABASE_URL = get_database_url()
+DB_SCHEMA = None
+if not DATABASE_URL.startswith("sqlite"):
+    configured_schema = os.environ.get("DB_SCHEMA", "").strip().strip("'\"")
+    if configured_schema.lower() in {"", "none", "null"}:
+        DB_SCHEMA = None
+    else:
+        DB_SCHEMA = configured_schema
 
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(schema=DB_SCHEMA)
 
 
 engine = create_engine(

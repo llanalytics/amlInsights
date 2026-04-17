@@ -1,0 +1,59 @@
+{
+  "version_id": 1,
+  "states": [
+    {
+      "state_code": "proposed",
+      "display_name": "Proposed",
+      "is_initial": true,
+      "is_terminal": false
+    },
+    {
+      "state_code": "under_review",
+      "display_name": "Under Review",
+      "is_initial": false,
+      "is_terminal": false
+    },
+    {
+      "state_code": "approved",
+      "display_name": "Approved",
+      "is_initial": false,
+      "is_terminal": true
+    },
+    {
+      "state_code": "rejected",
+      "display_name": "Rejected",
+      "is_initial": false,
+      "is_terminal": true
+    }
+  ],
+  "transitions": [
+    {
+      "transition_code": "submit_for_review",
+      "from_state_code": "proposed",
+      "to_state_code": "under_review",
+      "requires_comment": false,
+      "allowed_roles": [
+        "tenant_admin",
+        "red_flag_analyst"
+      ]
+    },
+    {
+      "transition_code": "approve",
+      "from_state_code": "under_review",
+      "to_state_code": "approved",
+      "requires_comment": true,
+      "allowed_roles": [
+        "red_flag_approver"
+      ]
+    },
+    {
+      "transition_code": "reject",
+      "from_state_code": "under_review",
+      "to_state_code": "rejected",
+      "requires_comment": true,
+      "allowed_roles": [
+        "red_flag_approver"
+      ]
+    }
+  ]
+}

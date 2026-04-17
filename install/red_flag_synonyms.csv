@@ -1,0 +1,40 @@
+scope,raw_value,canonical_value,is_active
+category,smurfing,structuring,true
+category,structuring transactions,structuring,true
+category,tbml,trade_based_money_laundering,true
+category,trade based ml,trade_based_money_laundering,true
+category,shell company,shell_company_misuse,true
+category,ubo obfuscation,beneficial_ownership_obfuscation,true
+category,beneficial ownership hiding,beneficial_ownership_obfuscation,true
+category,high risk jurisdiction,high_risk_jurisdiction_exposure,true
+category,sanctions circumvention,sanctions_evasion_indicators,true
+category,layering,other_suspicious_activity,true
+category,placement,other_suspicious_activity,true
+category,integration,other_suspicious_activity,true
+product,checking_account,deposit_account,true
+product,savings_account,deposit_account,true
+product,bank_account,deposit_account,true
+product,prepaid,prepaid_card,true
+product,debit_card,prepaid_card,true
+product,swift,wire_transfer,true
+product,mt103,wire_transfer,true
+product,correspondent_banking,correspondent_account,true
+product,letter_of_credit,trade_finance_instrument,true
+product,trade_finance,trade_finance_instrument,true
+product,crypto,digital_asset,true
+product,virtual_asset,digital_asset,true
+product,stablecoin,digital_asset,true
+product,cash_deposit,cash,true
+service,money_transfer,funds_transfer_service,true
+service,wire_service,funds_transfer_service,true
+service,remittance_service,funds_transfer_service,true
+service,deposit_service,cash_deposit_service,true
+service,withdrawal_service,cash_withdrawal_service,true
+service,fx_service,currency_exchange_service,true
+service,account_opening,account_opening_service,true
+service,customer_onboarding,kyc_onboarding_service,true
+service,kyc,kyc_onboarding_service,true
+service,trade_finance,trade_finance_processing_service,true
+service,payments,payment_processing_service,true
+service,card_services,card_issuing_service,true
+service,crypto_trading,crypto_exchange_service,true

@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+      body { margin:0; font-family: Georgia, "Times New Roman", serif; background: linear-gradient(130deg, #f1ebe2, #d8e6f2); color:#122230; }
+      main { max-width: 1150px; margin: 2rem auto; padding: 1rem; }
+      .panel { background: rgba(255,255,255,0.95); border-radius: 14px; box-shadow: 0 14px 30px rgba(18,34,49,0.14); padding: 1rem; margin-bottom: 1rem; }
+      details.panel { padding: 0; overflow: hidden; }
+      .accordion-title {
+        list-style: none;
+        cursor: pointer;
+        padding: 1rem;
+        font-weight: 700;
+        border-bottom: 1px solid #d8e1e9;
+        user-select: none;
+      }
+      .accordion-title::-webkit-details-marker { display: none; }
+      .accordion-title::after {
+        content: "▾";
+        float: right;
+        color: #4d6478;
+      }
+      details.panel:not([open]) .accordion-title { border-bottom: none; }
+      details.panel:not([open]) .accordion-title::after { content: "▸"; }
+      .accordion-body { padding: 1rem; }
+      .grid { display:grid; grid-template-columns: repeat(2,minmax(170px,1fr)); gap:0.6rem; }
+      label { font-size:0.9rem; display:block; }
+      input, select, button { width:100%; box-sizing:border-box; margin-top:0.2rem; padding:0.55rem; border-radius:8px; border:1px solid #b7c7d6; font-family: inherit; }
+      button { border:none; background:#1f5f8b; color:#fff; cursor:pointer; }
+      button.secondary { background:#5f7489; }
+      table { width:100%; border-collapse: collapse; }
+      th, td { text-align:left; padding:0.45rem; border-bottom:1px solid #d8e1e9; vertical-align: top; font-size:0.93rem; }
+      .pill { display:inline-block; padding:0.2rem 0.45rem; border-radius:999px; background:#e3eef7; margin:0.1rem 0.15rem 0.1rem 0; font-size:0.82rem; }
+      .msg { min-height:1.2rem; color:#1f5f8b; }
+      .subtle { color:#4d6478; font-size:0.9rem; }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.42);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 999;
+      }
+      .modal {
+        width: min(620px, 92vw);
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 20px 48px rgba(18, 34, 49, 0.22);
+        padding: 1rem;
+      }
+      .checkbox-inline {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.2rem;
+      }
+      .checkbox-inline input {
+        width: auto;
+        margin: 0;
+      }
+      .modal-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.6rem;
+        margin-top: 0.8rem;
+      }
+      .role-checklist {
+        border: 1px solid #b7c7d6;
+        border-radius: 8px;
+        padding: 0.45rem 0.55rem;
+        max-height: 220px;
+        overflow: auto;
+        margin-top: 0.2rem;
+        background: #fff;
+      }
+      .role-check {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin: 0.25rem 0;
+      }
+      .role-check input {
+        width: auto;
+        margin: 0;
+      }
+      .wf-checklist {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.75rem;
+      }
+      .wf-checklist label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.85rem;
+      }
+      .wf-checklist input {
+        width: auto;
+        margin: 0;
+      }
+      .mono {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-size: 0.82rem;
+      }
+      @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="panel">
+        <h1>Tenant Management</h1>
+        <p>Signed in as <strong>{{ user }}</strong>. This page is for platform-admin tenant and entitlement management.</p>
+        <p><a href="/dashboard">Back to dashboard</a></p>
+      </div>
+
+      {% if is_platform_admin %}
+      <details class="panel">
+        <summary class="accordion-title">Create Tenant</summary>
+        <div class="accordion-body">
+        <div class="grid">
+          <label>New Tenant Name
+            <input id="newTenantName" placeholder="Acme Bank">
+          </label>
+          <label>New Tenant Status
+            <select id="newTenantStatus">
+              <option value="active">active</option>
+              <option value="inactive">inactive</option>
+            </select>
+          </label>
+        </div>
+        <div style="margin-top:0.7rem; display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem;">
+          <button onclick="createTenant()">Create Tenant</button>
+          <button class="secondary" onclick="loadTenants()">Refresh Tenant List</button>
+        </div>
+        <div id="msg" class="msg"></div>
+        </div>
+      </details>
+
+      <details class="panel">
+        <summary class="accordion-title">Tenants</summary>
+        <div class="accordion-body">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Entitlements</th>
+              <th>Manage Entitlement</th>
+              <th>Tenant Actions</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        </div>
+      </details>
+      {% else %}
+      <details class="panel">
+        <summary class="accordion-title">Tenant Visibility</summary>
+        <div class="accordion-body">
+          <p class="subtle">Tenant creation and global tenant listing are restricted to platform administrators.</p>
+        </div>
+      </details>
+      {% endif %}
+
+      <details class="panel">
+        <summary class="accordion-title">Tenant Users</summary>
+        <div class="accordion-body">
+        <div class="grid" id="tenantSelectRow" style="margin-bottom:0.6rem;">
+          <label>Select Tenant
+            <select id="tenantUserTenantSelect" onchange="onTenantSelectionChanged()">
+              <option value="">-- Select tenant --</option>
+            </select>
+          </label>
+        </div>
+        <p class="subtle" id="tenantReadOnlyLabel" style="display:none;"></p>
+        <p class="subtle" id="selectedTenantLabel">Select a tenant to manage users.</p>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem; margin-bottom:0.6rem;">
+          <button class="secondary" id="refreshUsersBtn" onclick="loadTenantUsers()" disabled>Refresh Tenant Users</button>
+          <button id="addUserBtn" onclick="addOrUpdateTenantUser()" disabled>Add/Update Tenant User</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Status</th>
+              <th>Roles</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tenantUsersRows"></tbody>
+        </table>
+        </div>
+      </details>
+
+      <details class="panel">
+        <summary class="accordion-title">Business Units</summary>
+        <div class="accordion-body">
+        <p class="subtle" id="selectedBusinessUnitTenantLabel">Select a tenant to manage business units.</p>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem; margin-bottom:0.6rem;">
+          <button class="secondary" id="refreshBusinessUnitsBtn" onclick="loadBusinessUnits()" disabled>Refresh Business Units</button>
+          <button id="addBusinessUnitBtn" onclick="addBusinessUnit()" disabled>Add Business Unit</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Code</th>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="businessUnitsRows"></tbody>
+        </table>
+        </div>
+      </details>
+
+      <details class="panel">
+        <summary class="accordion-title">Workflow Administration</summary>
+        <div class="accordion-body">
+        <p class="subtle">Configure draft workflow policy, role-to-state mapping, and state-to-screen capability mapping.</p>
+        <div class="grid">
+          <label>Module
+            <select id="wfModuleCode">
+              <option value="red_flags" selected>red_flags</option>
+            </select>
+          </label>
+          <label>Entity Type
+            <select id="wfEntityType">
+              <option value="tenant_red_flag_selection" selected>tenant_red_flag_selection</option>
+            </select>
+          </label>
+        </div>
+        <div style="margin-top:0.6rem; display:grid; grid-template-columns: repeat(4, 1fr); gap:0.6rem;">
+          <button class="secondary" id="wfLoadBtn" onclick="loadWorkflowActive()" disabled>Load Active</button>
+          <button id="wfCreateDraftBtn" onclick="createWorkflowDraftFromActive()" disabled>Create Draft</button>
+          <button id="wfSaveDraftBtn" onclick="saveWorkflowDraft()" disabled>Save Draft</button>
+          <button id="wfValidateBtn" onclick="validateWorkflowDraft()" disabled>Validate Draft</button>
+        </div>
+        <div style="margin-top:0.6rem; display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem;">
+          <button id="wfPublishBtn" onclick="publishWorkflowDraft()" disabled>Publish Draft</button>
+          <button class="secondary" id="wfResetFromActiveBtn" onclick="resetWorkflowEditorFromActive()" disabled>Reset Editor From Active</button>
+        </div>
+        <div id="wfMsg" class="msg" style="margin-top:0.5rem;"></div>
+        <div id="wfMeta" class="subtle"></div>
+        <div style="margin-top:0.6rem; overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>State</th>
+                <th>Display</th>
+                <th>Initial</th>
+                <th>Terminal</th>
+                <th>Roles For Outbound Transitions</th>
+                <th>Screen Capabilities</th>
+              </tr>
+            </thead>
+            <tbody id="wfStateRows"></tbody>
+          </table>
+        </div>
+        </div>
+      </details>
+    </main>
+
+    <div id="tenantUserModalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tenantUserModalTitle">
+      <div class="modal">
+        <h3 id="tenantUserModalTitle">Tenant User</h3>
+        <div class="grid">
+          <label>Email
+            <input id="tenantUserFormEmail" type="email" placeholder="user@example.com">
+          </label>
+          <label>Roles
+            <div id="tenantUserFormRoles" class="role-checklist"></div>
+          </label>
+        </div>
+        <label style="margin-top:0.6rem;">Status</label>
+        <div class="checkbox-inline">
+          <input id="tenantUserFormActive" type="checkbox" checked>
+          <span>Active</span>
+        </div>
+        <div class="modal-actions">
+          <button onclick="saveTenantUserFromModal()">Save Tenant User</button>
+          <button class="secondary" onclick="closeTenantUserModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const MODULE_CODES = {{ module_codes | tojson }};
+      const IS_PLATFORM_ADMIN = {{ is_platform_admin | tojson }};
+      const ACCESSIBLE_TENANTS = {{ accessible_tenants | tojson }};
+      const CURRENT_USER_EMAIL = {{ user | tojson }};
+      const FALLBACK_TENANT_ROLES = [
+        "tenant_admin",
+        "red_flag_analyst",
+        "red_flag_approver",
+        "read_only_audit",
+        "control_developer",
+        "control_reviewer",
+        "control_approver"
+      ];
+      const WORKFLOW_CAPABILITY_CODES = [
+        "catalog_view",
+        "in_flight_view",
+        "completed_view",
+        "selection_edit",
+        "approval_review",
+        "audit_view"
+      ];
+      let availableTenantRoles = [...FALLBACK_TENANT_ROLES];
+      let selectedTenantId = null;
+      let selectedTenantName = null;
+      let tenantUserModalMode = "add";
+      let tenantUserModalOriginalEmail = null;
+      let workflowEditor = { active: null, draft: null, states: [], transitions: [] };
+
+      function el(id) { return document.getElementById(id); }
+      function headers() {
+        return {
+          "Content-Type": "application/json",
+          "x-user-email": String(CURRENT_USER_EMAIL || "").trim().toLowerCase()
+        };
+      }
+      function tenantHeaders(tenantId) {
+        return {
+          "Content-Type": "application/json",
+          "x-user-email": String(CURRENT_USER_EMAIL || "").trim().toLowerCase(),
+          "x-tenant-id": String(tenantId)
+        };
+      }
+      function msg(text, bad=false) {
+        const m = el("msg");
+        if (!m) {
+          const label = el("selectedTenantLabel");
+          if (label && text) {
+            label.textContent = text;
+            label.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+          }
+          return;
+        }
+        m.textContent = text || "";
+        m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      async function call(path, method="GET", body=null) {
+        const res = await fetch(path, {
+          method,
+          headers: headers(),
+          body: body ? JSON.stringify(body) : null
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+        }
+        return data;
+      }
+      async function callTenant(path, tenantId, method="GET", body=null) {
+        const res = await fetch(path, {
+          method,
+          headers: tenantHeaders(tenantId),
+          body: body ? JSON.stringify(body) : null
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+        }
+        return data;
+      }
+      async function request(path, method="GET", body=null) {
+        const res = await fetch(path, {
+          method,
+          headers: headers(),
+          body: body ? JSON.stringify(body) : null
+        });
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, status: res.status, data };
+      }
+      function wfMsg(text, bad=false) {
+        const m = el("wfMsg");
+        if (!m) return;
+        m.textContent = text || "";
+        m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      function setWorkflowButtonsEnabled(enabled) {
+        el("wfLoadBtn").disabled = !enabled;
+        el("wfCreateDraftBtn").disabled = !enabled;
+        el("wfSaveDraftBtn").disabled = !enabled;
+        el("wfValidateBtn").disabled = !enabled;
+        el("wfPublishBtn").disabled = !enabled;
+        el("wfResetFromActiveBtn").disabled = !enabled;
+      }
+      function resetWorkflowEditorState() {
+        workflowEditor = { active: null, draft: null, states: [], transitions: [] };
+        renderWorkflowEditor();
+      }
+      function workflowRoleCodes() {
+        const roleList = Array.isArray(availableTenantRoles) && availableTenantRoles.length
+          ? availableTenantRoles
+          : FALLBACK_TENANT_ROLES;
+        const out = [...new Set(roleList.map((v) => String(v).trim()).filter(Boolean))];
+        if (!out.includes("tenant_admin")) out.unshift("tenant_admin");
+        return out;
+      }
+      function computeStateRolesFromTransitions(states, transitions) {
+        const roleMap = {};
+        for (const s of (states || [])) roleMap[String(s.state_code)] = [];
+        for (const t of (transitions || [])) {
+          const fromCode = String(t.from_state_code || "");
+          if (!fromCode) continue;
+          if (!roleMap[fromCode]) roleMap[fromCode] = [];
+          for (const roleCode of (t.allowed_roles || [])) {
+            const code = String(roleCode || "").trim();
+            if (!code || roleMap[fromCode].includes(code)) continue;
+            roleMap[fromCode].push(code);
+          }
+        }
+        return roleMap;
+      }
+      function getWorkflowModuleCode() {
+        return String(el("wfModuleCode").value || "red_flags").trim();
+      }
+      function getWorkflowEntityType() {
+        return String(el("wfEntityType").value || "tenant_red_flag_selection").trim();
+      }
+      function renderWorkflowEditor() {
+        const tbody = el("wfStateRows");
+        const meta = el("wfMeta");
+        if (!tbody || !meta) return;
+        tbody.innerHTML = "";
+
+        const active = workflowEditor.active;
+        const draft = workflowEditor.draft;
+        const states = Array.isArray(workflowEditor.states) ? workflowEditor.states : [];
+        const transitions = Array.isArray(workflowEditor.transitions) ? workflowEditor.transitions : [];
+        const roleCodes = workflowRoleCodes();
+        const roleMap = computeStateRolesFromTransitions(states, transitions);
+
+        const activeLabel = active
+          ? `Active: v${active.version_no} (${active.status}) id=${active.workflow_version_id}`
+          : "Active: (not loaded)";
+        const draftLabel = draft
+          ? `Draft: id=${draft.workflow_version_id} (${draft.status || "draft"})`
+          : "Draft: (none)";
+        meta.textContent = `${activeLabel} | ${draftLabel}`;
+
+        if (!states.length) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td colspan="6">Load a workflow to begin editing.</td>`;
+          tbody.appendChild(tr);
+          return;
+        }
+        for (const state of states) {
+          const code = String(state.state_code || "");
+          const selectedRoles = roleMap[code] || [];
+          const selectedCaps = Array.isArray(state.capabilities) ? state.capabilities.map((v) => String(v)) : [];
+          const roleHtml = roleCodes.map((roleCode) => `
+            <label><input type="checkbox" data-wf-role-state="${code}" value="${roleCode}" ${selectedRoles.includes(roleCode) ? "checked" : ""}>${roleCode}</label>
+          `).join("");
+          const capHtml = WORKFLOW_CAPABILITY_CODES.map((capCode) => `
+            <label><input type="checkbox" data-wf-cap-state="${code}" value="${capCode}" ${selectedCaps.includes(capCode) ? "checked" : ""}>${capCode}</label>
+          `).join("");
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono">${code}</td>
+            <td>${String(state.display_name || "")}</td>
+            <td>${state.is_initial ? "yes" : "no"}</td>
+            <td>${state.is_terminal ? "yes" : "no"}</td>
+            <td><div class="wf-checklist">${roleHtml}</div></td>
+            <td><div class="wf-checklist">${capHtml}</div></td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }
+      function readWorkflowEditorStatePayload() {
+        const states = JSON.parse(JSON.stringify(workflowEditor.states || []));
+        const transitions = JSON.parse(JSON.stringify(workflowEditor.transitions || []));
+        const roleMap = {};
+        const capMap = {};
+
+        for (const cb of document.querySelectorAll("[data-wf-role-state]")) {
+          const state = String(cb.getAttribute("data-wf-role-state") || "");
+          if (!state) continue;
+          if (!roleMap[state]) roleMap[state] = [];
+          if (cb.checked) roleMap[state].push(String(cb.value || "").trim());
+        }
+        for (const cb of document.querySelectorAll("[data-wf-cap-state]")) {
+          const state = String(cb.getAttribute("data-wf-cap-state") || "");
+          if (!state) continue;
+          if (!capMap[state]) capMap[state] = [];
+          if (cb.checked) capMap[state].push(String(cb.value || "").trim());
+        }
+        for (const s of states) {
+          const code = String(s.state_code || "");
+          s.capabilities = [...new Set((capMap[code] || []).filter(Boolean))];
+        }
+        for (const t of transitions) {
+          const fromCode = String(t.from_state_code || "");
+          t.allowed_roles = [...new Set((roleMap[fromCode] || []).filter(Boolean))];
+        }
+        return { states, transitions };
+      }
+      async function loadWorkflowActive() {
+        if (!selectedTenantId) {
+          wfMsg("Select a tenant first.", true);
+          return;
+        }
+        try {
+          const moduleCode = encodeURIComponent(getWorkflowModuleCode());
+          const entityType = encodeURIComponent(getWorkflowEntityType());
+          const data = await callTenant(`/api/platform/workflows/${moduleCode}/${entityType}`, selectedTenantId, "GET");
+          workflowEditor.active = data;
+          if (!workflowEditor.draft) {
+            workflowEditor.states = JSON.parse(JSON.stringify(data.states || []));
+            workflowEditor.transitions = JSON.parse(JSON.stringify(data.transitions || []));
+          }
+          renderWorkflowEditor();
+          wfMsg(`Loaded active workflow for tenant #${selectedTenantId}.`);
+        } catch (e) {
+          wfMsg(`Workflow load failed: ${e.message}`, true);
+        }
+      }
+      async function createWorkflowDraftFromActive() {
+        if (!selectedTenantId) {
+          wfMsg("Select a tenant first.", true);
+          return;
+        }
+        if (!workflowEditor.active) {
+          await loadWorkflowActive();
+          if (!workflowEditor.active) return;
+        }
+        try {
+          const moduleCode = encodeURIComponent(getWorkflowModuleCode());
+          const entityType = encodeURIComponent(getWorkflowEntityType());
+          const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+          const created = await callTenant(`/api/platform/workflows/${moduleCode}/${entityType}/draft`, selectedTenantId, "POST", {
+            name: `${selectedTenantName || ("Tenant " + selectedTenantId)} ${getWorkflowModuleCode()} Draft ${now}`,
+            clone_from: { workflow_version_id: workflowEditor.active.workflow_version_id }
+          });
+          const draft = await callTenant(`/api/platform/workflow-versions/${created.workflow_version_id}`, selectedTenantId, "GET");
+          workflowEditor.draft = draft;
+          workflowEditor.states = JSON.parse(JSON.stringify(draft.states || []));
+          workflowEditor.transitions = JSON.parse(JSON.stringify(draft.transitions || []));
+          renderWorkflowEditor();
+          wfMsg(`Draft created (version id ${created.workflow_version_id}).`);
+        } catch (e) {
+          wfMsg(`Create draft failed: ${e.message}`, true);
+        }
+      }
+      async function saveWorkflowDraft() {
+        if (!selectedTenantId) {
+          wfMsg("Select a tenant first.", true);
+          return;
+        }
+        if (!workflowEditor.draft) {
+          wfMsg("Create a draft first.", true);
+          return;
+        }
+        try {
+          const moduleCode = encodeURIComponent(getWorkflowModuleCode());
+          const entityType = encodeURIComponent(getWorkflowEntityType());
+          const payload = readWorkflowEditorStatePayload();
+          const updated = await callTenant(`/api/platform/workflows/${moduleCode}/${entityType}/draft`, selectedTenantId, "PATCH", {
+            version_id: workflowEditor.draft.workflow_version_id,
+            states: payload.states,
+            transitions: payload.transitions
+          });
+          workflowEditor.states = payload.states;
+          workflowEditor.transitions = payload.transitions;
+          workflowEditor.draft = {
+            ...(workflowEditor.draft || {}),
+            workflow_version_id: updated.workflow_version_id,
+            status: updated.status
+          };
+          renderWorkflowEditor();
+          wfMsg(`Draft saved (version id ${updated.workflow_version_id}).`);
+        } catch (e) {
+          wfMsg(`Save draft failed: ${e.message}`, true);
+        }
+      }
+      async function validateWorkflowDraft() {
+        if (!selectedTenantId) {
+          wfMsg("Select a tenant first.", true);
+          return;
+        }
+        if (!workflowEditor.draft) {
+          wfMsg("Create a draft first.", true);
+          return;
+        }
+        try {
+          const moduleCode = encodeURIComponent(getWorkflowModuleCode());
+          const entityType = encodeURIComponent(getWorkflowEntityType());
+          const result = await callTenant(`/api/platform/workflows/${moduleCode}/${entityType}/draft/validate`, selectedTenantId, "POST", {
+            version_id: workflowEditor.draft.workflow_version_id
+          });
+          if (result.valid) {
+            wfMsg(`Draft validation passed${(result.warnings || []).length ? ` with ${(result.warnings || []).length} warning(s)` : ""}.`);
+          } else {
+            const errors = (result.errors || []).map((e) => `${e.code}: ${e.message}`).join("\n");
+            wfMsg(`Draft validation failed:\n${errors}`, true);
+          }
+        } catch (e) {
+          wfMsg(`Validate draft failed: ${e.message}`, true);
+        }
+      }
+      async function publishWorkflowDraft() {
+        if (!selectedTenantId) {
+          wfMsg("Select a tenant first.", true);
+          return;
+        }
+        if (!workflowEditor.draft) {
+          wfMsg("Create a draft first.", true);
+          return;
+        }
+        if (!window.confirm("Publish this draft workflow for the selected tenant?")) return;
+        try {
+          const moduleCode = encodeURIComponent(getWorkflowModuleCode());
+          const entityType = encodeURIComponent(getWorkflowEntityType());
+          const result = await callTenant(`/api/platform/workflows/${moduleCode}/${entityType}/draft/publish`, selectedTenantId, "POST", {
+            version_id: workflowEditor.draft.workflow_version_id,
+            publish_comment: "Published from Tenant Management UI"
+          });
+          workflowEditor.draft = null;
+          wfMsg(`Draft published as active workflow version ${result.workflow_version_id}.`);
+          await loadWorkflowActive();
+        } catch (e) {
+          wfMsg(`Publish draft failed: ${e.message}`, true);
+        }
+      }
+      function resetWorkflowEditorFromActive() {
+        if (!workflowEditor.active) {
+          wfMsg("Load active workflow first.", true);
+          return;
+        }
+        workflowEditor.states = JSON.parse(JSON.stringify(workflowEditor.active.states || []));
+        workflowEditor.transitions = JSON.parse(JSON.stringify(workflowEditor.active.transitions || []));
+        renderWorkflowEditor();
+        wfMsg("Editor reset from active workflow.");
+      }
+      function entitlementsHtml(items) {
+        if (!items || items.length === 0) return "";
+        return items.map(i => `<span class="pill">${i.module_code}: ${i.status}</span>`).join("");
+      }
+      function rolePills(items) {
+        if (!items || items.length === 0) return "";
+        return items.map(i => `<span class="pill">${i}</span>`).join("");
+      }
+      function fillTenantUserRoleOptions(selectedRoles=[]) {
+        const container = el("tenantUserFormRoles");
+        container.innerHTML = "";
+        const selectedSet = new Set((selectedRoles || []).map(v => String(v)));
+        const roleList = Array.isArray(availableTenantRoles) && availableTenantRoles.length
+          ? availableTenantRoles
+          : FALLBACK_TENANT_ROLES;
+        for (const code of roleList) {
+          const row = document.createElement("label");
+          row.className = "role-check";
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.value = code;
+          cb.checked = selectedSet.has(code);
+          const text = document.createElement("span");
+          text.textContent = code;
+          row.appendChild(cb);
+          row.appendChild(text);
+          container.appendChild(row);
+        }
+      }
+      async function loadAvailableTenantRoles() {
+        if (!selectedTenantId) {
+          availableTenantRoles = [...FALLBACK_TENANT_ROLES];
+          return;
+        }
+        try {
+          const roles = await callTenant("/api/tenant-admin/roles", selectedTenantId, "GET");
+          if (Array.isArray(roles) && roles.length) {
+            availableTenantRoles = roles.map(r => String(r));
+          } else {
+            availableTenantRoles = [...FALLBACK_TENANT_ROLES];
+          }
+        } catch (e) {
+          availableTenantRoles = [...FALLBACK_TENANT_ROLES];
+          msg(`Role list load failed, using fallback roles: ${e.message}`, true);
+        }
+      }
+      function openTenantUserModal(mode="add", row=null) {
+        tenantUserModalMode = mode;
+        tenantUserModalOriginalEmail = row && row.email ? String(row.email) : null;
+        el("tenantUserModalTitle").textContent = mode === "edit" ? "Edit Tenant User" : "Add Tenant User";
+        const emailInput = el("tenantUserFormEmail");
+        emailInput.value = row && row.email ? String(row.email) : "";
+        emailInput.disabled = mode === "edit";
+        el("tenantUserFormActive").checked = !row || String(row.status || "").toLowerCase() === "active";
+        fillTenantUserRoleOptions(row && Array.isArray(row.role_codes) ? row.role_codes : ["tenant_admin"]);
+        el("tenantUserModalBackdrop").style.display = "flex";
+      }
+      function closeTenantUserModal() {
+        el("tenantUserModalBackdrop").style.display = "none";
+      }
+      async function saveTenantUserFromModal() {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        const email = (tenantUserModalMode === "edit" && tenantUserModalOriginalEmail)
+          ? String(tenantUserModalOriginalEmail)
+          : el("tenantUserFormEmail").value.trim();
+        if (!email) {
+          msg("Email is required.", true);
+          return;
+        }
+        const status = el("tenantUserFormActive").checked ? "active" : "inactive";
+        const roleCodes = Array.from(el("tenantUserFormRoles").querySelectorAll('input[type="checkbox"]:checked')).map((o) => o.value);
+        try {
+          const saved = await callTenant("/api/tenant-admin/users", selectedTenantId, "POST", {
+            email,
+            status,
+            role_codes: roleCodes
+          });
+          closeTenantUserModal();
+          if (saved.invite_url) {
+            window.alert(
+              `Tenant user saved: ${email}\n\nPassword setup link (expires ${saved.invite_expires_at}):\n${saved.invite_url}`
+            );
+          } else {
+            window.alert(`Tenant user saved: ${email}`);
+          }
+          await loadTenantUsers();
+        } catch (e) {
+          msg(`Tenant user save failed: ${e.message}`, true);
+        }
+      }
+      function setSelectedTenant(id, name) {
+        selectedTenantId = id;
+        selectedTenantName = name;
+        el("selectedTenantLabel").textContent = `Managing users for tenant #${id}: ${name}`;
+        el("selectedBusinessUnitTenantLabel").textContent = `Managing business units for tenant #${id}: ${name}`;
+        el("refreshUsersBtn").disabled = false;
+        el("addUserBtn").disabled = false;
+        el("refreshBusinessUnitsBtn").disabled = false;
+        el("addBusinessUnitBtn").disabled = false;
+        if (IS_PLATFORM_ADMIN && el("tenantUserTenantSelect").value !== String(id)) {
+          el("tenantUserTenantSelect").value = String(id);
+        }
+        if (!IS_PLATFORM_ADMIN) {
+          el("tenantReadOnlyLabel").textContent = `Tenant: ${name}`;
+          el("tenantReadOnlyLabel").style.display = "block";
+        }
+        resetWorkflowEditorState();
+        setWorkflowButtonsEnabled(true);
+      }
+      async function onTenantSelectionChanged() {
+        const select = el("tenantUserTenantSelect");
+        const tenantId = select.value ? Number(select.value) : null;
+        if (!tenantId) {
+          selectedTenantId = null;
+          selectedTenantName = null;
+          el("selectedTenantLabel").textContent = "Select a tenant to manage users.";
+          el("selectedBusinessUnitTenantLabel").textContent = "Select a tenant to manage business units.";
+          el("refreshUsersBtn").disabled = true;
+          el("addUserBtn").disabled = true;
+          el("refreshBusinessUnitsBtn").disabled = true;
+          el("addBusinessUnitBtn").disabled = true;
+          el("tenantUsersRows").innerHTML = "";
+          el("businessUnitsRows").innerHTML = "";
+          resetWorkflowEditorState();
+          setWorkflowButtonsEnabled(false);
+          return;
+        }
+        const tenantName = select.options[select.selectedIndex]?.text || `Tenant ${tenantId}`;
+        setSelectedTenant(tenantId, tenantName);
+        await loadAvailableTenantRoles();
+        await loadTenantUsers();
+        await loadBusinessUnits();
+        await loadWorkflowActive();
+      }
+
+      async function createTenant() {
+        const name = el("newTenantName").value.trim();
+        if (!name) { msg("Tenant name is required.", true); return; }
+        try {
+          const created = await call("/api/admin/tenants", "POST", {
+            name,
+            status: el("newTenantStatus").value
+          });
+          msg(`Tenant created: ${created.name} (#${created.id})`);
+          window.alert(`Tenant created successfully: ${created.name} (#${created.id})`);
+          el("newTenantName").value = "";
+          await loadTenants();
+        } catch (e) {
+          msg(`Create failed: ${e.message}`, true);
+        }
+      }
+
+      async function loadTenantUsers() {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        try {
+          const users = await callTenant("/api/tenant-admin/users", selectedTenantId, "GET");
+          const tbody = el("tenantUsersRows");
+          tbody.innerHTML = "";
+          for (const row of users) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${row.email}</td>
+              <td>${row.status}</td>
+              <td>${rolePills(row.role_codes)}</td>
+              <td></td>
+            `;
+            const actionWrap = document.createElement("div");
+            actionWrap.style.display = "grid";
+            actionWrap.style.gridTemplateColumns = "1fr 1fr";
+            actionWrap.style.gap = "0.35rem";
+
+            const editBtn = document.createElement("button");
+            editBtn.className = "secondary";
+            editBtn.textContent = "Edit Roles";
+            editBtn.onclick = () => editTenantUser(row);
+
+            const delBtn = document.createElement("button");
+            delBtn.textContent = "Remove User";
+            delBtn.style.background = "#8b1f1f";
+            delBtn.onclick = () => removeTenantUser(row.email);
+            actionWrap.appendChild(editBtn);
+            actionWrap.appendChild(delBtn);
+            tr.children[3].appendChild(actionWrap);
+            tbody.appendChild(tr);
+          }
+          msg(`Loaded ${users.length} user(s) for tenant #${selectedTenantId}`);
+        } catch (e) {
+          msg(`Tenant users load failed: ${e.message}`, true);
+        }
+      }
+
+      async function editTenantUser(row) {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        await loadAvailableTenantRoles();
+        openTenantUserModal("edit", row);
+      }
+
+      async function addOrUpdateTenantUser() {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        await loadAvailableTenantRoles();
+        openTenantUserModal("add");
+      }
+
+      async function removeTenantUser(email) {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        if (!window.confirm(`Remove ${email} from tenant #${selectedTenantId}?`)) return;
+        try {
+          await callTenant(`/api/tenant-admin/users/${encodeURIComponent(email)}`, selectedTenantId, "DELETE");
+          msg(`Removed ${email} from tenant #${selectedTenantId}`);
+          await loadTenantUsers();
+        } catch (e) {
+          msg(`Remove failed: ${e.message}`, true);
+        }
+      }
+
+      async function loadBusinessUnits() {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        try {
+          const rows = await callTenant("/api/tenant-admin/business-units?include_inactive=true", selectedTenantId, "GET");
+          const tbody = el("businessUnitsRows");
+          tbody.innerHTML = "";
+          for (const row of rows) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${row.id}</td>
+              <td>${row.code}</td>
+              <td>${row.name}</td>
+              <td>${row.status}</td>
+              <td></td>
+            `;
+            const wrap = document.createElement("div");
+            wrap.style.display = "grid";
+            wrap.style.gridTemplateColumns = "1fr 1fr";
+            wrap.style.gap = "0.35rem";
+
+            const editBtn = document.createElement("button");
+            editBtn.className = "secondary";
+            editBtn.textContent = "Edit";
+            editBtn.onclick = () => editBusinessUnit(row);
+
+            const deactBtn = document.createElement("button");
+            deactBtn.style.background = "#8b1f1f";
+            deactBtn.textContent = row.status === "active" ? "Deactivate" : "Set Active";
+            deactBtn.onclick = () => toggleBusinessUnitStatus(row);
+
+            wrap.appendChild(editBtn);
+            wrap.appendChild(deactBtn);
+            tr.children[4].appendChild(wrap);
+            tbody.appendChild(tr);
+          }
+          msg(`Loaded ${rows.length} business unit(s) for tenant #${selectedTenantId}`);
+        } catch (e) {
+          msg(`Business units load failed: ${e.message}`, true);
+        }
+      }
+
+      async function addBusinessUnit() {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        const code = window.prompt("Business unit code (example: retail_banking):", "");
+        if (code === null) return;
+        const name = window.prompt("Business unit name:", "");
+        if (name === null) return;
+        if (!code.trim() || !name.trim()) {
+          msg("Business unit code and name are required.", true);
+          return;
+        }
+        const status = window.prompt("Status (active|inactive):", "active");
+        if (status === null) return;
+        try {
+          await callTenant("/api/tenant-admin/business-units", selectedTenantId, "POST", {
+            code,
+            name,
+            status,
+          });
+          await loadBusinessUnits();
+        } catch (e) {
+          msg(`Business unit create failed: ${e.message}`, true);
+        }
+      }
+
+      async function editBusinessUnit(row) {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        const code = window.prompt("Business unit code:", row.code || "");
+        if (code === null) return;
+        const name = window.prompt("Business unit name:", row.name || "");
+        if (name === null) return;
+        const status = window.prompt("Status (active|inactive):", row.status || "active");
+        if (status === null) return;
+        try {
+          await callTenant(`/api/tenant-admin/business-units/${row.id}`, selectedTenantId, "PATCH", {
+            code,
+            name,
+            status,
+          });
+          await loadBusinessUnits();
+        } catch (e) {
+          msg(`Business unit update failed: ${e.message}`, true);
+        }
+      }
+
+      async function toggleBusinessUnitStatus(row) {
+        if (!selectedTenantId) {
+          msg("Select a tenant first.", true);
+          return;
+        }
+        const next = row.status === "active" ? "inactive" : "active";
+        if (!window.confirm(`Set business unit '${row.code}' status to ${next}?`)) return;
+        try {
+          await callTenant(`/api/tenant-admin/business-units/${row.id}`, selectedTenantId, "PATCH", { status: next });
+          await loadBusinessUnits();
+        } catch (e) {
+          msg(`Business unit status update failed: ${e.message}`, true);
+        }
+      }
+
+      async function setEntitlement(tenantId) {
+        const moduleCode = window.prompt(`Module code (${MODULE_CODES.join(", ")}):`, MODULE_CODES[0] || "red_flags");
+        if (!moduleCode) return;
+        const status = window.prompt("Status (active|inactive):", "active");
+        if (!status) return;
+        try {
+          await call(`/api/admin/tenants/${tenantId}/entitlements`, "POST", { module_code: moduleCode, status });
+          msg(`Tenant #${tenantId}: entitlement updated (${moduleCode}=${status})`);
+          await loadTenants();
+        } catch (e) {
+          msg(`Entitlement update failed: ${e.message}`, true);
+        }
+      }
+
+      async function setTenantStatus(tenantId, currentStatus) {
+        const next = currentStatus === "active" ? "inactive" : "active";
+        if (!window.confirm(`Change tenant #${tenantId} status from ${currentStatus} to ${next}?`)) return;
+        try {
+          await call(`/api/admin/tenants/${tenantId}/status`, "PATCH", { status: next });
+          msg(`Tenant #${tenantId} status updated to ${next}`);
+          await loadTenants();
+        } catch (e) {
+          msg(`Status update failed: ${e.message}`, true);
+        }
+      }
+
+      async function deleteTenant(tenantId, tenantName) {
+        const confirmName = window.prompt(`Type the tenant name exactly to confirm deletion:\n${tenantName}`, "");
+        if (!confirmName) return;
+        try {
+          const safeQ = new URLSearchParams({ confirm_name: confirmName, force: "false" });
+          const safeResp = await request(`/api/admin/tenants/${tenantId}?` + safeQ.toString(), "DELETE");
+
+          if (safeResp.ok) {
+            msg(`Tenant #${tenantId} deleted`);
+            await loadTenants();
+            return;
+          }
+
+          if (safeResp.status !== 409) {
+            throw new Error((safeResp.data && safeResp.data.detail) ? JSON.stringify(safeResp.data.detail) : ("HTTP " + safeResp.status));
+          }
+
+          const detail = safeResp.data?.detail || {};
+          const counts = detail.linked_counts || {};
+          const lines = Object.entries(counts).map(([k, v]) => `- ${k}: ${v}`);
+          const confirmForce = window.confirm([
+            "Tenant has linked data and cannot be safely deleted.",
+            "",
+            "Linked counts:",
+            ...(lines.length ? lines : ["- (none reported)"]),
+            "",
+            "Click OK to FORCE delete, or Cancel to abort."
+          ].join("\n"));
+          if (!confirmForce) {
+            msg(`Delete canceled for tenant #${tenantId}`);
+            return;
+          }
+
+          const forceQ = new URLSearchParams({ confirm_name: confirmName, force: "true" });
+          await call(`/api/admin/tenants/${tenantId}?` + forceQ.toString(), "DELETE");
+          msg(`Tenant #${tenantId} deleted`);
+          await loadTenants();
+        } catch (e) {
+          msg(`Delete failed: ${e.message}`, true);
+        }
+      }
+
+      async function loadTenants() {
+        try {
+          const data = await call("/api/admin/tenants", "GET");
+          const tbody = el("rows");
+          const select = el("tenantUserTenantSelect");
+          tbody.innerHTML = "";
+          select.innerHTML = '<option value="">-- Select tenant --</option>';
+          for (const row of data) {
+            const opt = document.createElement("option");
+            opt.value = String(row.id);
+            opt.textContent = row.name;
+            select.appendChild(opt);
+
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${row.id}</td>
+              <td>${row.name}</td>
+              <td>${row.status}</td>
+              <td>${entitlementsHtml(row.entitlements)}</td>
+              <td></td>
+              <td></td>
+            `;
+            const b = document.createElement("button");
+            b.textContent = "Set Entitlement";
+            b.onclick = () => setEntitlement(row.id);
+            tr.children[4].appendChild(b);
+
+            const usersBtn = document.createElement("button");
+            usersBtn.textContent = "Manage Users";
+            usersBtn.onclick = () => {
+              setSelectedTenant(row.id, row.name);
+              loadAvailableTenantRoles();
+              loadTenantUsers();
+              loadBusinessUnits();
+              loadWorkflowActive();
+            };
+
+            const statusBtn = document.createElement("button");
+            statusBtn.textContent = row.status === "active" ? "Deactivate" : "Activate";
+            statusBtn.className = "secondary";
+            statusBtn.onclick = () => setTenantStatus(row.id, row.status);
+
+            const delBtn = document.createElement("button");
+            delBtn.textContent = "Delete";
+            delBtn.style.background = "#8b1f1f";
+            delBtn.onclick = () => deleteTenant(row.id, row.name);
+
+            const actionWrap = document.createElement("div");
+            actionWrap.style.display = "grid";
+            actionWrap.style.gridTemplateColumns = "1fr";
+            actionWrap.style.gap = "0.35rem";
+            actionWrap.appendChild(usersBtn);
+            actionWrap.appendChild(statusBtn);
+            actionWrap.appendChild(delBtn);
+            tr.children[5].appendChild(actionWrap);
+            tbody.appendChild(tr);
+          }
+          if (selectedTenantId) {
+            const exists = data.some(t => t.id === selectedTenantId);
+            if (exists) {
+              select.value = String(selectedTenantId);
+            } else {
+              onTenantSelectionChanged();
+            }
+          }
+          msg(`Loaded ${data.length} tenant(s)`);
+        } catch (e) {
+          msg(`Load failed: ${e.message}`, true);
+        }
+      }
+
+      async function loadAccessibleTenantOptions() {
+        try {
+          const tenants = Array.isArray(ACCESSIBLE_TENANTS) ? ACCESSIBLE_TENANTS : [];
+          const select = el("tenantUserTenantSelect");
+          if (IS_PLATFORM_ADMIN) {
+            select.innerHTML = '<option value="">-- Select tenant --</option>';
+            for (const t of tenants) {
+              const opt = document.createElement("option");
+              opt.value = String(t.id);
+              opt.textContent = t.name;
+              select.appendChild(opt);
+            }
+          }
+
+          if (!IS_PLATFORM_ADMIN) {
+            if (tenants.length >= 1) {
+              const tenant = tenants[0];
+              setSelectedTenant(tenant.id, tenant.name);
+              await loadAvailableTenantRoles();
+              await loadTenantUsers();
+              await loadBusinessUnits();
+              await loadWorkflowActive();
+              if (tenants.length > 1) {
+                msg(`Using tenant '${tenant.name}' for this user context.`, false);
+              }
+            } else if (tenants.length === 0) {
+              el("selectedTenantLabel").textContent = "No tenant assignment was resolved for this login.";
+              msg("No tenant assignments found for your account.", true);
+            }
+          }
+        } catch (e) {
+          el("selectedTenantLabel").textContent = "Tenant resolution failed.";
+          msg(`Failed to load accessible tenants: ${e.message}`, true);
+        }
+      }
+
+      if (IS_PLATFORM_ADMIN) {
+        el("tenantSelectRow").style.display = "grid";
+        setWorkflowButtonsEnabled(false);
+        loadTenants();
+      } else {
+        el("tenantSelectRow").style.display = "none";
+        el("selectedTenantLabel").textContent = "Resolving tenant from your login context...";
+        msg("Tenant list is hidden because your account is not a platform admin.");
+        setWorkflowButtonsEnabled(false);
+        loadAccessibleTenantOptions();
+      }
+    </script>
+  </body>
+</html>

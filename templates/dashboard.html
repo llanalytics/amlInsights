@@ -13,8 +13,8 @@
       }
 
       main {
-        max-width: 720px;
-        margin: 10vh auto;
+        max-width: 980px;
+        margin: 6vh auto;
         padding: 2.5rem;
         background: rgba(255, 255, 255, 0.92);
         border-radius: 18px;
@@ -29,13 +29,93 @@
       a {
         color: #1f5f8b;
       }
+
+      .sections {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(200px, 1fr));
+        gap: 1rem;
+        margin-top: 1.2rem;
+      }
+
+      .section {
+        border: 1px solid #d7e3ef;
+        border-radius: 12px;
+        padding: 1rem;
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .section h2 {
+        margin: 0 0 0.7rem 0;
+        font-size: 1.2rem;
+      }
+
+      .section p {
+        margin: 0.45rem 0;
+      }
+      .icon-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .icon-link img {
+        width: clamp(72px, 12vw, 144px);
+        height: auto;
+        display: block;
+      }
+
+
+      @media (max-width: 900px) {
+        .sections {
+          grid-template-columns: 1fr;
+        }
+      }
     </style>
   </head>
   <body>
     <main>
       <h1>Dashboard</h1>
       <p>You are signed in as <strong>{{ user }}</strong>.</p>
-      <p>This is a protected page that only loads when the session cookie is present.</p>
+  
+
+      <div class="sections">
+        {% if has_tenant_management_access %}
+        <section class="section">
+          <h2>Tenant Management</h2>
+          <p>
+            <a class="icon-link" href="/ui/admin/tenants" title="Open Tenant Management" aria-label="Open Tenant Management">
+              <img src="/static/images/tenant_management.png" alt="Tenant Management">
+            </a>
+          </p>
+        </section>
+        {% endif %}
+
+        {% if is_platform_admin %}
+        <section class="section">
+          <h2>Red Flag Curation</h2>
+          <p><a href="/ui/admin/red-flags-curation">Open Red Flags Curation UI (Platform Admin)</a></p>
+          <p><a href="/ui/admin/red-flag-synonyms">Open Red Flag Synonyms UI (Platform Admin)</a></p>
+        </section>
+        {% endif %}
+
+        <section class="section">
+          <h2>Red Flag Workspace</h2>
+          <p>
+            <a class="icon-link" href="/ui/red-flags/workspace" title="Open Red Flags Workspace" aria-label="Open Red Flags Workspace">
+              <img src="/static/images/red_flag.jpeg" alt="Red Flags Workspace">
+            </a>
+          </p>
+        </section>
+
+        <section class="section">
+          <h2>Reporting</h2>
+          <p>
+            <a class="icon-link" href="/ui/operational-reporting" title="Open Reporting" aria-label="Open Reporting">
+              <img src="/static/images/reporting.jpeg" alt="Reporting">
+            </a>
+          </p>
+        </section>
+      </div>
+
       <form method="post" action="/logout">
         <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
         <button type="submit">Log out</button>

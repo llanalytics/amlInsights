@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background: linear-gradient(145deg, #eef7f2, #f9f3ea);
+        color: #1f2933;
+      }
+
+      main {
+        max-width: 1240px;
+        margin: 4vh auto;
+        padding: 1.2rem;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 16px;
+        box-shadow: 0 16px 40px rgba(31, 41, 51, 0.14);
+      }
+
+      h1 { margin-top: 0; margin-bottom: 0.5rem; }
+      .error { color: #9f1239; font-weight: bold; }
+      pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 10px;
+        padding: 1rem;
+        overflow-x: auto;
+        max-width: 100%;
+        min-height: 360px;
+      }
+      .table-wrap {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      table.matrix {
+        width: max-content;
+        max-width: none;
+        border-collapse: collapse;
+        min-width: 740px;
+      }
+      table.matrix th, table.matrix td {
+        border-bottom: 1px solid #d8e5ef;
+        padding: 0.45rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      table.matrix th {
+        white-space: nowrap;
+        background: #f7fbff;
+      }
+      td.center {
+        text-align: center;
+        font-weight: 700;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(260px, 340px) 1fr;
+        gap: 1rem;
+        align-items: start;
+      }
+      .panel {
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid #d5e3dd;
+        border-radius: 12px;
+        padding: 0.8rem;
+        min-width: 0;
+        overflow: hidden;
+      }
+      .report-list {
+        display: grid;
+        gap: 0.55rem;
+      }
+      .report-item {
+        border: 1px solid #d6e4ef;
+        border-radius: 10px;
+        padding: 0.6rem;
+        background: #f8fbff;
+      }
+      .report-item.active {
+        border-color: #1f5f8b;
+        background: #e9f3fb;
+      }
+      .report-link {
+        display: inline-block;
+        margin-top: 0.45rem;
+        padding: 0.4rem 0.7rem;
+        border-radius: 999px;
+        background: #1f5f8b;
+        color: #fff;
+        text-decoration: none;
+        font-size: 0.9rem;
+      }
+      .report-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.45rem;
+      }
+      .report-link:hover {
+        background: #174b6d;
+      }
+      .subtle {
+        color: #4a5f73;
+        font-size: 0.92rem;
+      }
+      .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.7rem;
+        margin-bottom: 0.6rem;
+      }
+      .panel-header h2 {
+        margin: 0;
+      }
+      .export-link {
+        display: inline-block;
+        padding: 0.4rem 0.7rem;
+        border-radius: 999px;
+        background: #1f5f8b;
+        color: #fff;
+        text-decoration: none;
+        font-size: 0.9rem;
+        white-space: nowrap;
+      }
+      .export-link:hover {
+        background: #174b6d;
+      }
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Reporting</h1>
+      <p>Signed in as <strong>{{ user }}</strong> (<code>{{ user_email }}</code>).</p>
+      <p><a href="/dashboard">Back to dashboard</a></p>
+      {% if is_platform_admin %}
+      <p>Data scope: <strong>All tenants</strong> (platform admin).</p>
+      {% else %}
+      <p>Data scope: <strong>{{ tenant_scope_names | join(', ') }}</strong>.</p>
+      {% endif %}
+
+      {% if error %}
+      <p class="error">{{ error }}</p>
+      {% endif %}
+
+      <div class="layout">
+        <section class="panel">
+          <h2 style="margin-top:0;">Available Reports</h2>
+          {% if reports %}
+          <div class="report-list">
+            {% for report in reports %}
+            <article class="report-item{% if selected_report_code == report.code %} active{% endif %}">
+              <div><strong>{{ report.name }}</strong></div>
+              <div class="subtle">{{ report.description }}</div>
+              <div class="subtle">Roles: {{ report.required_roles | join(', ') }}</div>
+              <div class="report-actions">
+                <a class="report-link" href="/ui/operational-reporting?report_code={{ report.code }}">Run Report</a>
+                <a class="report-link" href="/api/operational-reporting/export-csv?report_code={{ report.code }}">Export CSV</a>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p>No accessible reports found for this tenant/user.</p>
+          {% endif %}
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Report Output{% if selected_report_name %}: {{ selected_report_name }}{% elif selected_report_code %}: {{ selected_report_code }}{% endif %}</h2>
+            {% if selected_report_code and not error %}
+            <a class="export-link" href="/api/operational-reporting/export-csv?report_code={{ selected_report_code }}">Export CSV</a>
+            {% endif %}
+          </div>
+          {% if selected_report_code == "users_by_role" and users_by_role_matrix %}
+          {% set matrix_roles = users_by_role_matrix.roles %}
+          {% set matrix_rows = users_by_role_matrix.rows %}
+          <div class="table-wrap">
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th>Tenant</th>
+                  <th>User</th>
+                  {% for role in matrix_roles %}
+                  <th>{{ role }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in matrix_rows %}
+                <tr>
+                  <td>{{ row.tenant_id }}</td>
+                  <td>{{ row.email }}</td>
+                  {% for role in matrix_roles %}
+                  <td class="center">{% if row.role_map.get(role) %}X{% endif %}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+                {% if not matrix_rows %}
+                <tr>
+                  <td colspan="{{ 2 + (matrix_roles | length) }}">No users found for current scope.</td>
+                </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+          {% elif selected_report_code == "module_entitlements" and module_entitlements_matrix %}
+          {% set matrix_modules = module_entitlements_matrix.modules %}
+          {% set matrix_rows = module_entitlements_matrix.rows %}
+          <div class="table-wrap">
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th>Tenant</th>
+                  {% for module_code in matrix_modules %}
+                  <th>{{ module_code }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in matrix_rows %}
+                <tr>
+                  <td>{{ row.tenant_name }} (#{{ row.tenant_id }})</td>
+                  {% for module_code in matrix_modules %}
+                  {% set status = row.module_map.get(module_code) %}
+                  <td class="center" title="{{ status or '' }}">{% if status == "active" %}X{% elif status %}-{% endif %}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+                {% if not matrix_rows %}
+                <tr>
+                  <td colspan="{{ 1 + (matrix_modules | length) }}">No entitlements found for current scope.</td>
+                </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+          {% elif selected_report_code == "red_flag_workspace_capabilities" and red_flag_workspace_capabilities_matrix %}
+          {% set matrix_caps = red_flag_workspace_capabilities_matrix.capabilities %}
+          {% set matrix_rows = red_flag_workspace_capabilities_matrix.rows %}
+          <div class="table-wrap">
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th>Tenant</th>
+                  <th>Role</th>
+                  <th>Workflow Source</th>
+                  {% for cap in matrix_caps %}
+                  <th>{{ cap }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in matrix_rows %}
+                <tr>
+                  <td>{{ row.tenant_name }} (#{{ row.tenant_id }})</td>
+                  <td>{{ row.role_code }}</td>
+                  <td>{{ row.workflow_source }}</td>
+                  {% for cap in matrix_caps %}
+                  <td class="center">{% if row.capability_map.get(cap) %}X{% endif %}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+                {% if not matrix_rows %}
+                <tr>
+                  <td colspan="{{ 3 + (matrix_caps | length) }}">No role/capability records found for current scope.</td>
+                </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+          {% elif report_result_json %}
+          <pre>{{ report_result_json }}</pre>
+          {% else %}
+          <p class="subtle">Select and run a report from the left panel to view output.</p>
+          {% endif %}
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

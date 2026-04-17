@@ -1,0 +1,4 @@
+tenant_name,code,name,status
+tenant1,retail_banking,Retail Banking,active
+tenant1,commercial_banking,Commercial Banking,active
+tenant1,payments,Payments,active

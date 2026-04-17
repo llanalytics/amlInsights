@@ -1,0 +1,19 @@
+<div id="auditModal" class="modal" onclick="if(event.target===this) closeAuditModal()">
+  <div class="modal-card">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:0.6rem;">
+      <h3 id="auditTitle" style="margin:0;">Selection Audit Trail</h3>
+      <button class="secondary" style="width:auto;" onclick="closeAuditModal()">Close</button>
+    </div>
+    <table style="margin-top:0.8rem;">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Timestamp</th>
+          <th>Action</th>
+          <th>Comment</th>
+        </tr>
+      </thead>
+      <tbody id="auditRows"></tbody>
+    </table>
+  </div>
+</div>

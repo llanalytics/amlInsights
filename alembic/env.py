@@ -1,10 +1,11 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
-from database import Base, get_database_url
+from database import Base, DB_SCHEMA, get_database_url
 import models  # noqa: F401
+import platform_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_database_url())
@@ -22,6 +23,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
+        include_schemas=bool(DB_SCHEMA),
     )
 
     with context.begin_transaction():
@@ -36,10 +38,15 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        if DB_SCHEMA:
+            connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{DB_SCHEMA}"'))
+            connection.commit()
+
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            include_schemas=bool(DB_SCHEMA),
         )
 
         with context.begin_transaction():
