@@ -8,3 +8,4 @@ check_vm_app.sh
 app.db
 .e cv
 .env
+.env
