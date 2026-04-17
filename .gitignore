@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 check_vm_app.sh
 app.db
+.e cv
