@@ -234,6 +234,32 @@ class TenantSummaryOut(BaseModel):
     status: str
 
 
+class TenantDataHubConnectionUpsertRequest(BaseModel):
+    base_url: str
+    auth_type: str = "none"
+    auth_header_name: str | None = None
+    auth_secret_ref: str | None = None
+    connect_timeout_seconds: int = 10
+    read_timeout_seconds: int = 20
+    is_active: bool = True
+
+
+class TenantDataHubConnectionOut(BaseModel):
+    tenant_id: int
+    base_url: str
+    auth_type: str
+    auth_header_name: str | None = None
+    auth_secret_ref: str | None = None
+    connect_timeout_seconds: int
+    read_timeout_seconds: int
+    is_active: bool
+    last_tested_at: str | None = None
+    last_test_status: str | None = None
+    last_test_message: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
 class BusinessUnitCreateRequest(BaseModel):
     code: str
     name: str

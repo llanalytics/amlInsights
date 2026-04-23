@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+      body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: linear-gradient(135deg, #eef5fb, #f6eee3); color: #1f2933; }
+      main { max-width: 1800px; margin: 1.2rem auto; padding: 0.8rem 1rem; }
+      .panel { background: rgba(255,255,255,0.95); border-radius: 14px; box-shadow: 0 14px 30px rgba(18,34,49,0.14); padding: 1rem; margin-bottom: 1rem; }
+      details.panel { padding: 0; overflow: hidden; }
+      .accordion-title { list-style: none; cursor: pointer; padding: 1rem; font-weight: 700; border-bottom: 1px solid #d8e1e9; user-select: none; }
+      .accordion-title::-webkit-details-marker { display: none; }
+      .accordion-title::after { content: "▾"; float: right; color: #4d6478; }
+      details.panel:not([open]) .accordion-title { border-bottom: none; }
+      details.panel:not([open]) .accordion-title::after { content: "▸"; }
+      .accordion-body { padding: 1rem; }
+      .grid { display:grid; grid-template-columns: repeat(4,minmax(160px,1fr)); gap:0.6rem; }
+      label { font-size:0.9rem; display:block; }
+      input, select, button { width:100%; box-sizing:border-box; margin-top:0.2rem; padding:0.55rem; border-radius:8px; border:1px solid #b7c7d6; font-family: inherit; }
+      button { border:none; background:#1f5f8b; color:#fff; cursor:pointer; }
+      button.secondary { background:#5f7489; }
+      .msg { min-height:1.2rem; color:#1f5f8b; margin-top: 0.5rem; }
+      .subtle { color:#4d6478; font-size:0.9rem; }
+      table { width:100%; border-collapse: collapse; }
+      th, td { text-align:left; padding:0.45rem; border-bottom:1px solid #d8e1e9; vertical-align: top; font-size:0.93rem; }
+      #graph { width: 100%; height: 74vh; min-height: 620px; border: 1px solid #d8e1e9; border-radius: 10px; background: #fff; }
+      .graph-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 0.8rem; align-items: start; }
+      .graph-main { min-width: 0; }
+      .graph-side { min-width: 0; border: 1px solid #d8e1e9; border-radius: 10px; padding: 0.7rem; background: #fbfdff; height: calc(74vh + 46px); min-height: 666px; overflow: auto; }
+      @media (max-width: 900px) {
+        .grid { grid-template-columns: 1fr; }
+        .graph-layout { grid-template-columns: 1fr; }
+        .graph-side { height: auto; min-height: 280px; }
+        #graph { height: 520px; min-height: 520px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="panel">
+        <h1>Exposure Search</h1>
+        <p>Signed in as <strong>{{ user }}</strong>. Search across customer, account, counterparty, OFAC, and Panama notes.</p>
+        <p><a href="/dashboard">Back to dashboard</a></p>
+      </div>
+
+      <details class="panel" open>
+        <summary class="accordion-title">Exposure Search</summary>
+        <div class="accordion-body">
+          <p class="subtle" id="tenantResolvedLabel"></p>
+          <div class="grid">
+            <label>Name Search
+              <input id="searchText" placeholder="Type a name">
+            </label>
+            <label>Result Limit
+              <input id="resultLimit" type="number" min="1" max="200" value="25">
+            </label>
+            <label>Graph Hops
+              <input id="hops" type="number" min="1" max="5" value="2">
+            </label>
+            <label>Max Nodes
+              <input id="maxNodes" type="number" min="10" max="2000" value="500">
+            </label>
+            <label>Max Edges
+              <input id="maxEdges" type="number" min="10" max="5000" value="2000">
+            </label>
+          </div>
+          <div style="margin-top:0.7rem; display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem;">
+            <button onclick="runSearch()">Search Exposure</button>
+            <button class="secondary" onclick="clearGraph()">Clear Graph</button>
+          </div>
+          <div id="msg" class="msg"></div>
+        </div>
+      </details>
+
+      <details class="panel" open>
+        <summary class="accordion-title">Search Results</summary>
+        <div class="accordion-body">
+          <table>
+            <thead>
+              <tr>
+                <th>Node Type</th>
+                <th>Label</th>
+                <th>Business Key</th>
+                <th>Matched Fields</th>
+                <th>Score</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="resultsRows"></tbody>
+          </table>
+        </div>
+      </details>
+
+      <details class="panel" open>
+        <summary class="accordion-title">Exposure Graph</summary>
+        <div class="accordion-body">
+          <div class="graph-layout">
+            <div class="graph-main">
+              <div style="display:grid; grid-template-columns: repeat(3, 140px); gap:0.5rem; margin-bottom:0.6rem;">
+                <button class="secondary" onclick="zoomGraphIn()">Zoom In</button>
+                <button class="secondary" onclick="zoomGraphOut()">Zoom Out</button>
+                <button class="secondary" onclick="resetGraphView()">Reset View</button>
+              </div>
+              <div id="graph"></div>
+            </div>
+            <div class="graph-side">
+              <div class="subtle" id="detailsHint">Click a node or edge to view attributes. Double-click a node to expand/collapse links.</div>
+              <div id="detailsContainer" style="margin-top:0.5rem;"></div>
+            </div>
+          </div>
+        </div>
+      </details>
+    </main>
+
+    <script src="https://unpkg.com/cytoscape@3.30.0/dist/cytoscape.min.js"></script>
+    <script>
+      const CURRENT_USER_EMAIL = {{ default_user_email | tojson }};
+      const ACCESSIBLE_TENANTS = {{ accessible_tenants | tojson }};
+      const DEFAULT_TENANT_ID = {{ default_tenant_id | tojson }};
+      const DEFAULT_TENANT_NAME = (ACCESSIBLE_TENANTS || []).find((t) => Number(t.id) === Number(DEFAULT_TENANT_ID))?.name || "";
+      const EXPAND_HINT_THRESHOLD = 3;
+      const SURROGATE_TYPES = new Set(["SurrogateName", "SurrogateAddress", "SurrogateNameAddress"]);
+      let cy = null;
+      let initialNodeIds = new Set();
+      let initialEdgeIds = new Set();
+      const nodeOwners = new Map();
+      const edgeOwners = new Map();
+      const expandedByNode = new Map();
+      let lastFocusedElementSig = "";
+      let lastFocusedAtMs = 0;
+      const FOCUS_DEBOUNCE_MS = 60;
+
+      function el(id) { return document.getElementById(id); }
+      function msg(text, bad=false) {
+        const m = el("msg");
+        m.textContent = text || "";
+        m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      function headers() {
+        return { "Content-Type": "application/json", "x-user-email": String(CURRENT_USER_EMAIL || "").trim().toLowerCase() };
+      }
+      async function call(path) {
+        const res = await fetch(path, { method: "GET", headers: headers() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+        return data;
+      }
+      function selectedTenantId() { return Number(DEFAULT_TENANT_ID || 0); }
+      function initResolvedTenantLabel() {
+        const label = el("tenantResolvedLabel");
+        if (!label) return;
+        if (!DEFAULT_TENANT_ID) { label.textContent = "No tenant context resolved for this user."; return; }
+        if (DEFAULT_TENANT_NAME) { label.textContent = `Tenant context: ${DEFAULT_TENANT_NAME} (#${DEFAULT_TENANT_ID})`; return; }
+        label.textContent = `Tenant context: #${DEFAULT_TENANT_ID}`;
+      }
+
+      function svgDataUrl(svg) { return "data:image/svg+xml;utf8," + encodeURIComponent(svg); }
+      function iconForNodeType(nodeType) {
+        const t = String(nodeType || "").trim();
+        const icons = {
+          Customer: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='20' r='11' fill='#ffffff'/><path d='M12 54c0-10 8-17 20-17s20 7 20 17' fill='#ffffff'/></svg>`,
+          Account: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='14' width='48' height='36' rx='4' fill='#ffffff'/><rect x='12' y='22' width='40' height='4' fill='#1f5f8b'/><rect x='12' y='32' width='22' height='4' fill='#1f5f8b'/></svg>`,
+          CounterpartyAccount: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='12' width='48' height='40' rx='4' fill='#ffffff'/><path d='M10 30h44' stroke='#8b5f1f' stroke-width='4'/><circle cx='45' cy='42' r='4' fill='#8b5f1f'/></svg>`,
+          OfacSdn: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='26' fill='#ffffff'/><path d='M20 20l24 24M44 20L20 44' stroke='#9b1c1c' stroke-width='6' stroke-linecap='round'/></svg>`,
+          PanamaNode: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><polygon points='32,8 56,24 56,40 32,56 8,40 8,24' fill='#ffffff'/></svg>`,
+          SurrogateName: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='8' width='48' height='48' rx='6' fill='#ffffff'/><text x='32' y='40' text-anchor='middle' font-size='28' font-family='Arial' fill='#6b7280'>N</text></svg>`,
+          SurrogateAddress: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='8' width='48' height='48' rx='6' fill='#ffffff'/><text x='32' y='40' text-anchor='middle' font-size='28' font-family='Arial' fill='#6b7280'>A</text></svg>`,
+          SurrogateNameAddress: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='8' width='48' height='48' rx='6' fill='#ffffff'/><text x='32' y='40' text-anchor='middle' font-size='22' font-family='Arial' fill='#6b7280'>N+A</text></svg>`
+        };
+        return svgDataUrl(icons[t] || `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='24' fill='#ffffff'/></svg>`);
+      }
+      function clearDetails(message) {
+        const hint = el("detailsHint");
+        const container = el("detailsContainer");
+        if (!hint || !container) return;
+        hint.textContent = message || "Click a node or edge to view attributes. Double-click a node to expand/collapse links.";
+        container.innerHTML = "";
+      }
+      function formatDetailValue(value) {
+        if (value === null || value === undefined || value === "") return "-";
+        if (Array.isArray(value)) return value.length ? value.join(", ") : "-";
+        if (typeof value === "object") return JSON.stringify(value);
+        return String(value);
+      }
+      function renderDetailsRows(entries) {
+        return entries.map(([k, v]) => `<div style="display:grid; grid-template-columns: 220px 1fr; gap:0.6rem; padding:0.25rem 0; border-bottom:1px solid #e5ecf2;"><div class="subtle">${k}</div><div>${formatDetailValue(v)}</div></div>`).join("");
+      }
+      function renderNodeDetails(nodeData) {
+        const hint = el("detailsHint");
+        const container = el("detailsContainer");
+        if (!hint || !container) return;
+        if (!nodeData || typeof nodeData !== "object") { clearDetails(); return; }
+        const nodeType = String(nodeData.node_type || "");
+        if (SURROGATE_TYPES.has(nodeType)) { clearDetails("Attributes are not displayed for surrogate nodes."); return; }
+        const ignore = new Set(["icon_svg", "display_label", "base_label"]);
+        const entries = Object.entries(nodeData).filter(([k]) => !ignore.has(k)).sort((a,b)=>a[0].localeCompare(b[0]));
+        hint.textContent = `Node: ${String(nodeData.label || nodeData.id || "-")} (${nodeType || "Unknown"})`;
+        container.innerHTML = entries.length ? renderDetailsRows(entries) : "<div class='subtle'>No attributes available for this node.</div>";
+      }
+      function renderEdgeDetails(edgeData) {
+        const hint = el("detailsHint");
+        const container = el("detailsContainer");
+        if (!hint || !container) return;
+        if (!edgeData || typeof edgeData !== "object") { clearDetails(); return; }
+        hint.textContent = `Edge: ${String(edgeData.edge_type || "Edge")} (${String(edgeData.source || "-")} -> ${String(edgeData.target || "-")})`;
+        const entries = Object.entries(edgeData).sort((a,b)=>a[0].localeCompare(b[0]));
+        container.innerHTML = entries.length ? renderDetailsRows(entries) : "<div class='subtle'>No attributes available for this edge.</div>";
+      }
+      function canFocusElement(sig) {
+        const now = Date.now();
+        if (sig === lastFocusedElementSig && (now - lastFocusedAtMs) < FOCUS_DEBOUNCE_MS) return false;
+        lastFocusedElementSig = sig;
+        lastFocusedAtMs = now;
+        return true;
+      }
+      function collapseInitialGraph(payload, threshold=3) {
+        const elements = (payload && payload.elements) ? payload.elements : { nodes: [], edges: [] };
+        const nodes = Array.isArray(elements.nodes) ? elements.nodes : [];
+        const edges = Array.isArray(elements.edges) ? elements.edges : [];
+        const centerNode = String(payload && payload.center_node ? payload.center_node : "");
+        const neighbors = {};
+        for (const e of edges) {
+          const d = e.data || {};
+          const src = String(d.source || "");
+          const dst = String(d.target || "");
+          if (!src || !dst) continue;
+          if (!neighbors[src]) neighbors[src] = new Set();
+          if (!neighbors[dst]) neighbors[dst] = new Set();
+          neighbors[src].add(dst);
+          neighbors[dst].add(src);
+        }
+        const disallowPairs = new Set();
+        for (const nodeId of Object.keys(neighbors)) {
+          const arr = Array.from(neighbors[nodeId]).sort();
+          if (arr.length <= threshold) continue;
+          let keep = arr.slice(0, threshold);
+          if (centerNode && arr.includes(centerNode) && !keep.includes(centerNode)) keep[keep.length - 1] = centerNode;
+          const keepSet = new Set(keep);
+          for (const nb of arr) {
+            if (keepSet.has(nb)) continue;
+            disallowPairs.add(`${nodeId}|${nb}`);
+            disallowPairs.add(`${nb}|${nodeId}`);
+          }
+        }
+        const keptEdges = [];
+        for (const e of edges) {
+          const d = e.data || {};
+          const src = String(d.source || "");
+          const dst = String(d.target || "");
+          if (!src || !dst) continue;
+          if (disallowPairs.has(`${src}|${dst}`)) continue;
+          keptEdges.push(e);
+        }
+        const reachable = new Set();
+        if (centerNode) {
+          const adj = {};
+          for (const e of keptEdges) {
+            const d = e.data || {};
+            const src = String(d.source || "");
+            const dst = String(d.target || "");
+            if (!src || !dst) continue;
+            if (!adj[src]) adj[src] = new Set();
+            if (!adj[dst]) adj[dst] = new Set();
+            adj[src].add(dst);
+            adj[dst].add(src);
+          }
+          const queue = [centerNode];
+          reachable.add(centerNode);
+          while (queue.length) {
+            const cur = queue.shift();
+            const nbs = adj[cur] || new Set();
+            for (const nb of nbs) { if (!reachable.has(nb)) { reachable.add(nb); queue.push(nb); } }
+          }
+        } else {
+          for (const e of keptEdges) {
+            const d = e.data || {};
+            if (d.source) reachable.add(String(d.source));
+            if (d.target) reachable.add(String(d.target));
+          }
+        }
+        const reachableEdges = keptEdges.filter((e) => {
+          const d = e.data || {};
+          return reachable.has(String(d.source || "")) && reachable.has(String(d.target || ""));
+        });
+        const keptNodes = [];
+        for (const n of nodes) {
+          const d = n.data || {};
+          const nid = String(d.id || "");
+          if (!nid) continue;
+          const degreeTotal = neighbors[nid] ? neighbors[nid].size : 0;
+          if (!reachable.has(nid)) continue;
+          keptNodes.push({ data: { ...d, degree_total: Number(d.degree_total || degreeTotal) } });
+        }
+        return { ...payload, elements: { nodes: keptNodes, edges: reachableEdges }, node_count: keptNodes.length, edge_count: reachableEdges.length };
+      }
+      function nodeVisibleDegree(node) {
+        if (!node) return 0;
+        const ids = new Set();
+        for (const e of node.connectedEdges()) {
+          const src = String(e.data("source") || "");
+          const dst = String(e.data("target") || "");
+          if (src && src !== node.id()) ids.add(src);
+          if (dst && dst !== node.id()) ids.add(dst);
+        }
+        return ids.size;
+      }
+      function hiddenNeighborCount(node) {
+        const total = Number(node.data("degree_total") || 0);
+        const visible = nodeVisibleDegree(node);
+        return Math.max(0, total - visible);
+      }
+      function addOwner(mapObj, key, owner) {
+        const k = String(key || ""), o = String(owner || "");
+        if (!k || !o) return;
+        if (!mapObj.has(k)) mapObj.set(k, new Set());
+        mapObj.get(k).add(o);
+      }
+      function removeOwner(mapObj, key, owner) {
+        const k = String(key || ""), o = String(owner || "");
+        if (!k || !o || !mapObj.has(k)) return;
+        const owners = mapObj.get(k);
+        owners.delete(o);
+        if (!owners.size) mapObj.delete(k);
+      }
+      function refreshNodeLabelsWithExpansionHints() {
+        if (!cy) return;
+        for (const n of cy.nodes()) {
+          const base = String(n.data("base_label") || n.data("label") || n.id());
+          const hidden = hiddenNeighborCount(n);
+          n.data("display_label", hidden > 0 && Number(n.data("degree_total") || 0) > EXPAND_HINT_THRESHOLD ? `${base} (+${hidden})` : base);
+        }
+      }
+      async function expandNodeNeighbors(nodeId) {
+        if (!cy || !nodeId) return;
+        const tenantId = selectedTenantId();
+        const existingIds = cy.nodes().map((n) => n.id());
+        const params = new URLSearchParams();
+        params.set("tenant_id", String(tenantId));
+        params.set("node_id", nodeId);
+        params.set("limit", "50");
+        params.set("offset", "0");
+        params.set("exclude_node_ids", existingIds.join(","));
+        const payload = await call("/api/entity-search/node-neighbors?" + params.toString());
+        const nodes = ((payload.elements || {}).nodes || []).map((n) => n.data || {});
+        const edges = ((payload.elements || {}).edges || []).map((e) => e.data || {});
+        let addedCount = 0;
+        const expandedNodes = new Set();
+        const expandedEdges = new Set();
+        for (const nd of nodes) {
+          const nid = String(nd.id || "");
+          if (!nid) continue;
+          expandedNodes.add(nid);
+          if (cy.getElementById(nid).length > 0) { addOwner(nodeOwners, nid, nodeId); continue; }
+          const nodeType = String(nd.node_type || "Node");
+          const baseLabel = String(nd.label || nd.id || "");
+          cy.add({ group: "nodes", data: { ...nd, base_label: baseLabel, display_label: baseLabel, icon_svg: iconForNodeType(nodeType) } });
+          addOwner(nodeOwners, nid, nodeId);
+          addedCount += 1;
+        }
+        for (const ed of edges) {
+          const eid = String(ed.id || "");
+          if (!eid) continue;
+          expandedEdges.add(eid);
+          if (cy.getElementById(eid).length > 0) { addOwner(edgeOwners, eid, nodeId); continue; }
+          cy.add({ group: "edges", data: ed });
+          addOwner(edgeOwners, eid, nodeId);
+        }
+        expandedByNode.set(String(nodeId), { nodes: expandedNodes, edges: expandedEdges });
+        if (addedCount > 0) cy.layout({ name: "cose", animate: false, fit: false, padding: 20 }).run();
+        refreshNodeLabelsWithExpansionHints();
+        return payload;
+      }
+      function collapseNodeExpansion(nodeId) {
+        if (!cy) return { removed_nodes: 0, removed_edges: 0 };
+        const key = String(nodeId || "");
+        const snapshot = expandedByNode.get(key);
+        if (!snapshot) return { removed_nodes: 0, removed_edges: 0 };
+        let removedEdges = 0, removedNodes = 0;
+        for (const eid of snapshot.edges || []) {
+          removeOwner(edgeOwners, eid, key);
+          if (!initialEdgeIds.has(eid) && !edgeOwners.has(eid)) {
+            const edgeEl = cy.getElementById(eid);
+            if (edgeEl && edgeEl.length) { edgeEl.remove(); removedEdges += 1; }
+          }
+        }
+        for (const nid of snapshot.nodes || []) {
+          removeOwner(nodeOwners, nid, key);
+          if (initialNodeIds.has(nid) || nodeOwners.has(nid)) continue;
+          const nodeEl = cy.getElementById(nid);
+          if (!nodeEl || !nodeEl.length) continue;
+          if (nodeEl.connectedEdges().length === 0) { nodeEl.remove(); removedNodes += 1; }
+        }
+        expandedByNode.delete(key);
+        refreshNodeLabelsWithExpansionHints();
+        cy.layout({ name: "cose", animate: false, fit: false, padding: 20 }).run();
+        return { removed_nodes: removedNodes, removed_edges: removedEdges };
+      }
+      async function toggleNodeExpansion(node) {
+        if (!cy || !node || !node.length) return;
+        const nodeId = node.id();
+        if (expandedByNode.has(String(nodeId))) {
+          const res = collapseNodeExpansion(nodeId);
+          msg(`Collapsed ${nodeId}: removed ${res.removed_nodes} node(s), ${res.removed_edges} edge(s).`);
+          return;
+        }
+        const hidden = hiddenNeighborCount(node);
+        const hasExpandableHidden = hidden > 0 && Number(node.data("degree_total") || 0) > EXPAND_HINT_THRESHOLD;
+        if (!hasExpandableHidden) return;
+        try {
+          const result = await expandNodeNeighbors(nodeId);
+          const returned = Number((result && result.returned_neighbor_count) || 0);
+          const remaining = Number((result && result.remaining_neighbor_count) || 0);
+          msg(`Expanded ${returned} node(s) from ${nodeId}${remaining > 0 ? `, ${remaining} still hidden` : ""}.`);
+        } catch (e) {
+          msg(`Expansion failed: ${e.message}`, true);
+        }
+      }
+      function clearGraph() {
+        if (cy) { cy.destroy(); cy = null; }
+        initialNodeIds = new Set();
+        initialEdgeIds = new Set();
+        nodeOwners.clear();
+        edgeOwners.clear();
+        expandedByNode.clear();
+        lastFocusedElementSig = "";
+        lastFocusedAtMs = 0;
+        const graphDiv = el("graph");
+        if (graphDiv && graphDiv.parentNode) {
+          const fresh = graphDiv.cloneNode(false);
+          graphDiv.parentNode.replaceChild(fresh, graphDiv);
+        }
+        clearDetails();
+        msg("Graph cleared.");
+      }
+      function renderGraph(payload) {
+        const collapsed = collapseInitialGraph(payload, EXPAND_HINT_THRESHOLD);
+        const graphDiv = el("graph");
+        const nodes = ((collapsed.elements || {}).nodes || []).map((n) => {
+          const data = n.data || {};
+          const nodeType = String(data.node_type || "Node");
+          const baseLabel = String(data.label || data.id || "");
+          return { data: { ...data, base_label: baseLabel, display_label: baseLabel, icon_svg: iconForNodeType(nodeType) } };
+        });
+        const edges = ((collapsed.elements || {}).edges || []).map((e) => ({ data: e.data }));
+        if (cy) cy.destroy();
+        if (!window.cytoscape) { graphDiv.innerHTML = "<p class='subtle'>Cytoscape.js not available.</p>"; return; }
+        initialNodeIds = new Set(nodes.map((n) => String((n.data || {}).id || "")).filter(Boolean));
+        initialEdgeIds = new Set(edges.map((e) => String((e.data || {}).id || "")).filter(Boolean));
+        nodeOwners.clear(); edgeOwners.clear(); expandedByNode.clear();
+        cy = cytoscape({
+          container: graphDiv,
+          boxSelectionEnabled: false,
+          autounselectify: false,
+          elements: { nodes, edges },
+          style: [
+            { selector: "node", style: { "label": "data(display_label)", "font-size": 8, "text-wrap": "wrap", "text-max-width": 120, "background-color": "#1f5f8b", "color": "#1f2933", "width": 24, "height": 24, "background-image": "data(icon_svg)", "background-fit": "cover", "background-clip": "none", "background-opacity": 1 } },
+            { selector: "edge", style: { "curve-style": "bezier", "target-arrow-shape": "triangle", "arrow-scale": 0.7, "line-color": "#7f99ad", "target-arrow-color": "#7f99ad", "width": 1.2, "label": "" } },
+            { selector: "node[node_type = 'Customer']", style: { "background-color": "#2d7e46" } },
+            { selector: "node[node_type = 'Account']", style: { "background-color": "#155fa0" } },
+            { selector: "node[node_type = 'CounterpartyAccount']", style: { "background-color": "#8b5f1f" } },
+            { selector: "node[node_type = 'OfacSdn']", style: { "background-color": "#9b1c1c" } },
+            { selector: "node[node_type = 'PanamaNode']", style: { "background-color": "#5d3d9b" } },
+            { selector: "node[node_type = 'SurrogateName'], node[node_type = 'SurrogateAddress'], node[node_type = 'SurrogateNameAddress']", style: { "background-color": "#6b7280", "shape": "diamond", "width": 16, "height": 16 } }
+          ],
+          layout: { name: "cose", animate: false, fit: true, padding: 20 }
+        });
+        refreshNodeLabelsWithExpansionHints();
+        const focusNode = (evt) => {
+          const t = evt && evt.target ? evt.target : null;
+          if (!t || t === cy || !(typeof t.isNode === "function" && t.isNode())) return;
+          const sig = `node:${String(t.id ? t.id() : "")}`;
+          if (!canFocusElement(sig)) return;
+          renderNodeDetails(t.data());
+        };
+        const focusEdge = (evt) => {
+          const t = evt && evt.target ? evt.target : null;
+          if (!t || t === cy || !(typeof t.isEdge === "function" && t.isEdge())) return;
+          const sig = `edge:${String(t.id ? t.id() : "")}`;
+          if (!canFocusElement(sig)) return;
+          renderEdgeDetails(t.data());
+        };
+        cy.on("mouseover", "node", focusNode);
+        cy.on("click", "node", focusNode);
+        cy.on("select", "node", focusNode);
+        cy.on("dbltap", "node", async (evt) => {
+          await toggleNodeExpansion(evt.target);
+        });
+        cy.on("click", "edge", focusEdge);
+        cy.on("select", "edge", focusEdge);
+      }
+      function zoomGraphIn() { if (!cy) return; cy.zoom({ level: cy.zoom() * 1.2, renderedPosition: { x: cy.width()/2, y: cy.height()/2 } }); }
+      function zoomGraphOut() { if (!cy) return; cy.zoom({ level: cy.zoom() / 1.2, renderedPosition: { x: cy.width()/2, y: cy.height()/2 } }); }
+      function resetGraphView() { if (!cy) return; cy.fit(undefined, 20); cy.center(); }
+
+      async function runSearch() {
+        const q = String(el("searchText").value || "").trim();
+        const tenantId = selectedTenantId();
+        if (!tenantId) { msg("Select a tenant.", true); return; }
+        if (!q) { msg("Enter a name to search.", true); return; }
+        try {
+          clearGraph();
+          const params = new URLSearchParams();
+          params.set("tenant_id", String(tenantId));
+          params.set("q", q);
+          params.set("limit", String(Number(el("resultLimit").value || 25)));
+          const data = await call("/api/entity-search/exposure-seed-search?" + params.toString());
+          renderSearchResults((data && data.results) ? data.results : []);
+          msg(`Found ${(data && data.result_count) || 0} exposure match(es).`);
+        } catch (e) {
+          msg(`Search failed: ${e.message}`, true);
+        }
+      }
+      function renderSearchResults(rows) {
+        const tbody = el("resultsRows");
+        tbody.innerHTML = "";
+        for (const row of (rows || [])) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${row.node_type || ""}</td>
+            <td>${row.label || ""}</td>
+            <td>${row.business_key || ""}</td>
+            <td>${Array.isArray(row.matched_fields) ? row.matched_fields.join(", ") : ""}</td>
+            <td>${row.score || 0}</td>
+            <td></td>
+          `;
+          const btn = document.createElement("button");
+          btn.textContent = "Load Exposure";
+          btn.onclick = () => loadExposureGraph(row);
+          tr.children[5].appendChild(btn);
+          tbody.appendChild(tr);
+        }
+      }
+      async function loadExposureGraph(resultRow) {
+        const nodeId = String((resultRow && resultRow.node_id) || "");
+        const tenantId = selectedTenantId();
+        if (!tenantId) { msg("Select a tenant.", true); return; }
+        if (!nodeId) { msg("Seed node id is required.", true); return; }
+        try {
+          const params = new URLSearchParams();
+          params.set("tenant_id", String(tenantId));
+          params.set("node_id", nodeId);
+          params.set("hops", String(Number(el("hops").value || 2)));
+          params.set("max_nodes", String(Number(el("maxNodes").value || 500)));
+          params.set("max_edges", String(Number(el("maxEdges").value || 2000)));
+          const payload = await call("/api/entity-search/exposure-graph?" + params.toString());
+          renderGraph(payload);
+          clearDetails();
+          msg(`Graph loaded for ${nodeId}: ${payload.node_count || 0} nodes, ${payload.edge_count || 0} edges.`);
+        } catch (e) {
+          msg(`Graph load failed: ${e.message}`, true);
+        }
+      }
+
+      initResolvedTenantLabel();
+      clearDetails();
+    </script>
+  </body>
+</html>

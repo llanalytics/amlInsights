@@ -6,6 +6,7 @@ import re
 import csv
 import io
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -38,6 +39,7 @@ from platform_models import (
     Tenant,
     Role,
     TenantModuleEntitlement,
+    TenantDataHubConnection,
     BusinessUnit,
     RedFlag,
     SourceDocument,
@@ -70,6 +72,8 @@ from platform_schemas import (
     TenantOut,
     TenantEntitlementOut,
     TenantSummaryOut,
+    TenantDataHubConnectionOut,
+    TenantDataHubConnectionUpsertRequest,
     TenantUserOut,
     TenantUserUpsertRequest,
     BusinessUnitCreateRequest,
@@ -119,6 +123,7 @@ OPERATIONAL_REPORT_DEFINITIONS: dict[str, dict[str, str | tuple[str, ...]]] = {
 
 DEFAULT_TENANT_ROLE_CODES: tuple[str, ...] = (
     "tenant_admin",
+    "tenant_investigator",
     "red_flag_analyst",
     "red_flag_approver",
     "read_only_audit",
@@ -1182,6 +1187,14 @@ def dashboard(request: Request):
                 role_code="tenant_admin",
             )
         )
+        has_tenant_investigator = bool(
+            user_email
+            and _accessible_tenant_summaries_for_role(
+                db,
+                user_email,
+                role_code="tenant_investigator",
+            )
+        )
     finally:
         db.close()
 
@@ -1197,6 +1210,14 @@ def dashboard(request: Request):
             "has_red_flag_approver": has_red_flag_approver,
             "has_read_only_audit": has_read_only_audit,
             "has_tenant_management_access": bool(is_platform_admin or has_tenant_admin),
+            "has_red_flag_workspace_access": bool(
+                is_platform_admin
+                or has_tenant_admin
+                or has_red_flag_analyst
+                or has_red_flag_approver
+                or has_read_only_audit
+            ),
+            "has_entity_search_access": bool(is_platform_admin or has_tenant_admin or has_tenant_investigator),
         },
     )
 
@@ -2227,6 +2248,106 @@ def operational_reporting_export_csv(
         db.close()
 
 
+@app.get("/ui/entity-search")
+def entity_search_ui(request: Request):
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=303)
+
+    user_email = _session_user_email(request)
+    db = get_db()
+    try:
+        is_platform_admin = _is_platform_admin_user(db, user_email)
+        investigator_tenants = (
+            _accessible_tenant_summaries_for_role(db, user_email or "", "tenant_investigator")
+            if user_email
+            else []
+        )
+        admin_tenants = (
+            _accessible_tenant_summaries_for_role(db, user_email or "", "tenant_admin")
+            if user_email
+            else []
+        )
+        if is_platform_admin:
+            accessible_tenants = _accessible_tenant_summaries_for_user(db, user_email or "", True)
+        else:
+            merged: dict[int, dict[str, object]] = {}
+            for t in investigator_tenants + admin_tenants:
+                merged[int(t["id"])] = t
+            accessible_tenants = list(merged.values())
+
+        if not accessible_tenants:
+            raise HTTPException(
+                status_code=403,
+                detail="Entity Search requires tenant_investigator or tenant_admin role.",
+            )
+        default_tenant_id = int(accessible_tenants[0]["id"])
+    finally:
+        db.close()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="entity_search.html",
+        context={
+            "title": "Entity Search",
+            "user": request.session["user"],
+            "default_user_email": user_email or "",
+            "default_tenant_id": default_tenant_id,
+            "accessible_tenants": accessible_tenants,
+            "csrf_token": get_csrf_token(request),
+        },
+    )
+
+
+@app.get("/ui/exposure-search")
+def exposure_search_ui(request: Request):
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=303)
+
+    user_email = _session_user_email(request)
+    db = get_db()
+    try:
+        is_platform_admin = _is_platform_admin_user(db, user_email)
+        investigator_tenants = (
+            _accessible_tenant_summaries_for_role(db, user_email or "", "tenant_investigator")
+            if user_email
+            else []
+        )
+        admin_tenants = (
+            _accessible_tenant_summaries_for_role(db, user_email or "", "tenant_admin")
+            if user_email
+            else []
+        )
+        if is_platform_admin:
+            accessible_tenants = _accessible_tenant_summaries_for_user(db, user_email or "", True)
+        else:
+            merged: dict[int, dict[str, object]] = {}
+            for t in investigator_tenants + admin_tenants:
+                merged[int(t["id"])] = t
+            accessible_tenants = list(merged.values())
+
+        if not accessible_tenants:
+            raise HTTPException(
+                status_code=403,
+                detail="Exposure Search requires tenant_investigator or tenant_admin role.",
+            )
+        default_tenant_id = int(accessible_tenants[0]["id"])
+    finally:
+        db.close()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="exposure_search.html",
+        context={
+            "title": "Exposure Search",
+            "user": request.session["user"],
+            "default_user_email": user_email or "",
+            "default_tenant_id": default_tenant_id,
+            "accessible_tenants": accessible_tenants,
+            "csrf_token": get_csrf_token(request),
+        },
+    )
+
+
 @app.get("/ui/red-flags/selections")
 def red_flag_selections_ui(request: Request):
     if not is_authenticated(request):
@@ -2870,6 +2991,153 @@ def _serialize_business_unit(row: BusinessUnit) -> BusinessUnitOut:
     )
 
 
+_ALLOWED_DATA_HUB_AUTH_TYPES = {"none", "bearer_token", "api_key", "custom_header"}
+
+
+def _normalize_data_hub_base_url(raw_url: str) -> str:
+    value = str(raw_url or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="base_url is required.")
+    if value.endswith("/"):
+        value = value[:-1]
+    if not (value.startswith("http://") or value.startswith("https://")):
+        raise HTTPException(status_code=400, detail="base_url must start with http:// or https://")
+    return value
+
+
+def _serialize_tenant_data_hub_connection(row: TenantDataHubConnection) -> TenantDataHubConnectionOut:
+    return TenantDataHubConnectionOut(
+        tenant_id=int(row.tenant_id),
+        base_url=row.base_url,
+        auth_type=row.auth_type,
+        auth_header_name=row.auth_header_name,
+        auth_secret_ref=row.auth_secret_ref,
+        connect_timeout_seconds=int(row.connect_timeout_seconds),
+        read_timeout_seconds=int(row.read_timeout_seconds),
+        is_active=bool(row.is_active),
+        last_tested_at=row.last_tested_at.isoformat() if row.last_tested_at else None,
+        last_test_status=row.last_test_status,
+        last_test_message=row.last_test_message,
+        created_at=row.created_at.isoformat() if row.created_at else None,
+        updated_at=row.updated_at.isoformat() if row.updated_at else None,
+    )
+
+
+def _validate_data_hub_connection_payload(payload: TenantDataHubConnectionUpsertRequest) -> dict[str, object]:
+    auth_type = str(payload.auth_type or "").strip().lower()
+    if auth_type not in _ALLOWED_DATA_HUB_AUTH_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"auth_type must be one of: {', '.join(sorted(_ALLOWED_DATA_HUB_AUTH_TYPES))}",
+        )
+
+    connect_timeout = int(payload.connect_timeout_seconds)
+    read_timeout = int(payload.read_timeout_seconds)
+    if connect_timeout < 1 or connect_timeout > 120:
+        raise HTTPException(status_code=400, detail="connect_timeout_seconds must be between 1 and 120.")
+    if read_timeout < 1 or read_timeout > 300:
+        raise HTTPException(status_code=400, detail="read_timeout_seconds must be between 1 and 300.")
+
+    auth_header_name = (payload.auth_header_name or "").strip() or None
+    auth_secret_ref = (payload.auth_secret_ref or "").strip() or None
+    if auth_type == "custom_header" and not auth_header_name:
+        raise HTTPException(status_code=400, detail="auth_header_name is required when auth_type is custom_header.")
+
+    return {
+        "base_url": _normalize_data_hub_base_url(payload.base_url),
+        "auth_type": auth_type,
+        "auth_header_name": auth_header_name,
+        "auth_secret_ref": auth_secret_ref,
+        "connect_timeout_seconds": connect_timeout,
+        "read_timeout_seconds": read_timeout,
+        "is_active": bool(payload.is_active),
+    }
+
+
+def _data_hub_test_headers(row: TenantDataHubConnection) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    secret_ref = str(row.auth_secret_ref or "").strip()
+    if not secret_ref:
+        return headers
+    if row.auth_type == "bearer_token":
+        headers["Authorization"] = f"Bearer {secret_ref}"
+    elif row.auth_type == "api_key":
+        headers["x-api-key"] = secret_ref
+    elif row.auth_type == "custom_header" and row.auth_header_name:
+        headers[row.auth_header_name] = secret_ref
+    return headers
+
+
+def _test_data_hub_connection(row: TenantDataHubConnection) -> tuple[str, str]:
+    timeout = (int(row.connect_timeout_seconds), int(row.read_timeout_seconds))
+    url = row.base_url.rstrip("/") + "/health"
+    req = urllib.request.Request(url=url, method="GET", headers=_data_hub_test_headers(row))
+    try:
+        with urllib.request.urlopen(req, timeout=max(timeout)) as resp:
+            body = resp.read(512).decode("utf-8", errors="replace")
+            code = int(getattr(resp, "status", 200))
+            if code >= 400:
+                return "failed", f"Health check returned HTTP {code}"
+            return "ok", f"Health check succeeded ({code}) {body[:120]}".strip()
+    except urllib.error.HTTPError as exc:
+        return "failed", f"Health check failed with HTTP {int(exc.code)}"
+    except urllib.error.URLError as exc:
+        return "failed", f"Health check connection error: {exc.reason}"
+    except Exception as exc:
+        return "failed", f"Health check error: {exc}"
+
+
+def _resolve_tenant_data_hub_connection_or_404(db: Session, tenant_id: int) -> TenantDataHubConnection:
+    row = (
+        db.query(TenantDataHubConnection)
+        .filter(
+            TenantDataHubConnection.tenant_id == tenant_id,
+            TenantDataHubConnection.is_active.is_(True),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No active Data Hub connection configured for tenant {tenant_id}.",
+        )
+    return row
+
+
+def _proxy_data_hub_json(
+    connection: TenantDataHubConnection,
+    path: str,
+    query_params: dict[str, object] | None = None,
+) -> dict:
+    query = urllib.parse.urlencode({k: v for k, v in (query_params or {}).items() if v is not None}, doseq=True)
+    url = connection.base_url.rstrip("/") + path
+    if query:
+        url = f"{url}?{query}"
+    req = urllib.request.Request(
+        url=url,
+        method="GET",
+        headers=_data_hub_test_headers(connection),
+    )
+    timeout = max(int(connection.connect_timeout_seconds), int(connection.read_timeout_seconds))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = resp.read().decode("utf-8")
+        data = json.loads(payload) if payload else {}
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=502, detail="Data Hub returned a non-object JSON response.")
+        return data
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
+        raise HTTPException(
+            status_code=502,
+            detail=f"Data Hub request failed ({int(exc.code)}): {body[:400]}",
+        )
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=502, detail=f"Data Hub connection error: {exc.reason}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Data Hub returned invalid JSON.")
+
+
 def _accessible_tenants_for_user(db: Session, user_email: str, is_platform_admin: bool) -> list[Tenant]:
     if is_platform_admin:
         return db.query(Tenant).order_by(Tenant.name.asc()).all()
@@ -2890,6 +3158,30 @@ def _accessible_tenants_for_user(db: Session, user_email: str, is_platform_admin
         .order_by(Tenant.name.asc())
         .all()
     )
+
+
+def _user_has_any_tenant_role(db: Session, user_email: str | None, tenant_id: int, role_codes: tuple[str, ...]) -> bool:
+    if not user_email:
+        return False
+    user_id = _get_user_id_by_email(db, user_email)
+    if not user_id:
+        return False
+    role_set = {str(r).strip() for r in role_codes if str(r).strip()}
+    if not role_set:
+        return False
+    row = (
+        db.query(TenantUserRole.id)
+        .join(TenantUser, TenantUser.id == TenantUserRole.tenant_user_id)
+        .join(Role, Role.id == TenantUserRole.role_id)
+        .filter(
+            TenantUser.tenant_id == tenant_id,
+            TenantUser.app_user_id == user_id,
+            TenantUser.status == "active",
+            Role.code.in_(sorted(role_set)),
+        )
+        .first()
+    )
+    return row is not None
 
 
 def _accessible_tenant_summaries_for_module_role(
@@ -5774,6 +6066,362 @@ def list_accessible_tenant_admin_tenants(
         is_platform_admin = _is_platform_admin_user(db, auth.user_email)
         tenants = _accessible_tenant_summaries_for_user(db, auth.user_email or "", is_platform_admin)
         return [TenantSummaryOut(id=int(t["id"]), name=str(t["name"]), status=str(t["status"])) for t in tenants]
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.get("/api/tenant-admin/data-hub-connection", response_model=TenantDataHubConnectionOut | None)
+def get_tenant_data_hub_connection(
+    auth: AuthContext = Depends(require_tenant_admin_or_platform_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        row = (
+            db.query(TenantDataHubConnection)
+            .filter(TenantDataHubConnection.tenant_id == auth.tenant_id)
+            .first()
+        )
+        if not row:
+            return None
+        return _serialize_tenant_data_hub_connection(row)
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.put("/api/admin/tenants/{tenant_id}/data-hub-connection", response_model=TenantDataHubConnectionOut)
+def upsert_admin_tenant_data_hub_connection(
+    request: Request,
+    tenant_id: int,
+    payload: TenantDataHubConnectionUpsertRequest,
+    auth: AuthContext = Depends(require_platform_admin),
+    db: Session = Depends(get_db),
+):
+    values = _validate_data_hub_connection_payload(payload)
+    try:
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found.")
+
+        row = (
+            db.query(TenantDataHubConnection)
+            .filter(TenantDataHubConnection.tenant_id == tenant_id)
+            .first()
+        )
+        now = datetime.now(timezone.utc)
+        if not row:
+            row = TenantDataHubConnection(
+                tenant_id=tenant_id,
+                created_at=now,
+                updated_at=now,
+                **values,
+            )
+            db.add(row)
+        else:
+            row.base_url = str(values["base_url"])
+            row.auth_type = str(values["auth_type"])
+            row.auth_header_name = values["auth_header_name"]
+            row.auth_secret_ref = values["auth_secret_ref"]
+            row.connect_timeout_seconds = int(values["connect_timeout_seconds"])
+            row.read_timeout_seconds = int(values["read_timeout_seconds"])
+            row.is_active = bool(values["is_active"])
+            row.updated_at = now
+
+        tenant.updated_at = now
+        db.commit()
+        db.refresh(row)
+        _record_audit_event(
+            db,
+            module_code="tenant_admin",
+            action="tenant_data_hub_connection_upserted",
+            tenant_id=tenant_id,
+            entity_type="tenant_data_hub_connection",
+            entity_id=int(row.id),
+            actor_user_id=_get_user_id_by_email(db, auth.user_email or ""),
+            actor_email=auth.user_email,
+            request=request,
+            payload={
+                "tenant_id": tenant_id,
+                "base_url": row.base_url,
+                "auth_type": row.auth_type,
+                "is_active": bool(row.is_active),
+                "connect_timeout_seconds": int(row.connect_timeout_seconds),
+                "read_timeout_seconds": int(row.read_timeout_seconds),
+            },
+        )
+        db.commit()
+        return _serialize_tenant_data_hub_connection(row)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.post("/api/admin/tenants/{tenant_id}/data-hub-connection/test")
+def test_admin_tenant_data_hub_connection(
+    request: Request,
+    tenant_id: int,
+    auth: AuthContext = Depends(require_platform_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        row = (
+            db.query(TenantDataHubConnection)
+            .filter(TenantDataHubConnection.tenant_id == tenant_id)
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Data Hub connection not found for tenant.")
+        status, message = _test_data_hub_connection(row)
+        row.last_tested_at = datetime.now(timezone.utc)
+        row.last_test_status = status
+        row.last_test_message = message
+        row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        _record_audit_event(
+            db,
+            module_code="tenant_admin",
+            action="tenant_data_hub_connection_tested",
+            tenant_id=tenant_id,
+            entity_type="tenant_data_hub_connection",
+            entity_id=int(row.id),
+            actor_user_id=_get_user_id_by_email(db, auth.user_email or ""),
+            actor_email=auth.user_email,
+            request=request,
+            payload={"status": status, "message": message},
+        )
+        db.commit()
+        return {
+            "tenant_id": tenant_id,
+            "status": status,
+            "message": message,
+            "tested_at": row.last_tested_at.isoformat() if row.last_tested_at else None,
+        }
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.get("/api/entity-search/customer-seed-search")
+def entity_search_customer_seed_search(
+    tenant_id: int = Query(..., ge=1),
+    q: str = Query(..., min_length=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    business_unit: str | None = Query(default=None),
+    customer_segment: str | None = Query(default=None),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+        allowed = is_platform_admin or _user_has_any_tenant_role(
+            db,
+            auth.user_email,
+            tenant_id,
+            ("tenant_investigator", "tenant_admin"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Entity Search requires tenant_investigator or tenant_admin.")
+
+        connection = _resolve_tenant_data_hub_connection_or_404(db, tenant_id)
+        return _proxy_data_hub_json(
+            connection,
+            "/api/graph/customer-seed-search",
+            {
+                "q": q.strip(),
+                "limit": limit,
+                "business_unit": (business_unit or "").strip() or None,
+                "customer_segment": (customer_segment or "").strip() or None,
+            },
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.get("/api/entity-search/customer-graph")
+def entity_search_customer_graph(
+    tenant_id: int = Query(..., ge=1),
+    customer_key: str = Query(..., min_length=1),
+    hops: int = Query(default=2, ge=1, le=5),
+    max_nodes: int = Query(default=500, ge=10, le=2000),
+    max_edges: int = Query(default=2000, ge=10, le=5000),
+    include_surrogates: bool = Query(default=True),
+    include_ofac_matches: bool = Query(default=True),
+    include_txn_flow: bool = Query(default=True),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+        allowed = is_platform_admin or _user_has_any_tenant_role(
+            db,
+            auth.user_email,
+            tenant_id,
+            ("tenant_investigator", "tenant_admin"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Entity Search requires tenant_investigator or tenant_admin.")
+
+        connection = _resolve_tenant_data_hub_connection_or_404(db, tenant_id)
+        path = "/api/graph/customer/" + urllib.parse.quote(customer_key.strip(), safe="")
+        return _proxy_data_hub_json(
+            connection,
+            path,
+            {
+                "hops": hops,
+                "max_nodes": max_nodes,
+                "max_edges": max_edges,
+                "include_surrogates": include_surrogates,
+                "include_ofac_matches": include_ofac_matches,
+                "include_txn_flow": include_txn_flow,
+            },
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.get("/api/entity-search/exposure-seed-search")
+def entity_search_exposure_seed_search(
+    tenant_id: int = Query(..., ge=1),
+    q: str = Query(..., min_length=1),
+    limit: int = Query(default=25, ge=1, le=200),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+        allowed = is_platform_admin or _user_has_any_tenant_role(
+            db,
+            auth.user_email,
+            tenant_id,
+            ("tenant_investigator", "tenant_admin"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Exposure Search requires tenant_investigator or tenant_admin.")
+
+        connection = _resolve_tenant_data_hub_connection_or_404(db, tenant_id)
+        return _proxy_data_hub_json(
+            connection,
+            "/api/graph/exposure-seed-search",
+            {
+                "q": q.strip(),
+                "limit": limit,
+            },
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.get("/api/entity-search/exposure-graph")
+def entity_search_exposure_graph(
+    tenant_id: int = Query(..., ge=1),
+    node_id: str = Query(..., min_length=1),
+    hops: int = Query(default=2, ge=1, le=5),
+    max_nodes: int = Query(default=500, ge=10, le=2000),
+    max_edges: int = Query(default=2000, ge=10, le=5000),
+    include_surrogates: bool = Query(default=True),
+    include_ofac_matches: bool = Query(default=True),
+    include_txn_flow: bool = Query(default=True),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+        allowed = is_platform_admin or _user_has_any_tenant_role(
+            db,
+            auth.user_email,
+            tenant_id,
+            ("tenant_investigator", "tenant_admin"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Exposure Search requires tenant_investigator or tenant_admin.")
+
+        connection = _resolve_tenant_data_hub_connection_or_404(db, tenant_id)
+        return _proxy_data_hub_json(
+            connection,
+            "/api/graph/exposure",
+            {
+                "node_id": node_id.strip(),
+                "hops": hops,
+                "max_nodes": max_nodes,
+                "max_edges": max_edges,
+                "include_surrogates": include_surrogates,
+                "include_ofac_matches": include_ofac_matches,
+                "include_txn_flow": include_txn_flow,
+            },
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.get("/api/entity-search/node-neighbors")
+def entity_search_node_neighbors(
+    tenant_id: int = Query(..., ge=1),
+    node_id: str = Query(..., min_length=1),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    exclude_node_ids: str | None = Query(default=None),
+    include_surrogates: bool = Query(default=True),
+    include_ofac_matches: bool = Query(default=True),
+    include_txn_flow: bool = Query(default=True),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+        allowed = is_platform_admin or _user_has_any_tenant_role(
+            db,
+            auth.user_email,
+            tenant_id,
+            ("tenant_investigator", "tenant_admin"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Entity Search requires tenant_investigator or tenant_admin.")
+
+        connection = _resolve_tenant_data_hub_connection_or_404(db, tenant_id)
+        return _proxy_data_hub_json(
+            connection,
+            "/api/graph/node-neighbors",
+            {
+                "node_id": node_id.strip(),
+                "limit": limit,
+                "offset": offset,
+                "exclude_node_ids": (exclude_node_ids or "").strip() or None,
+                "include_surrogates": include_surrogates,
+                "include_ofac_matches": include_ofac_matches,
+                "include_txn_flow": include_txn_flow,
+            },
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.get("/api/entity-search/customer-transactions")
+def entity_search_customer_transactions(
+    tenant_id: int = Query(..., ge=1),
+    customer_key: str = Query(..., min_length=1),
+    limit: int = Query(default=5000, ge=1, le=50000),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+        allowed = is_platform_admin or _user_has_any_tenant_role(
+            db,
+            auth.user_email,
+            tenant_id,
+            ("tenant_investigator", "tenant_admin"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Entity Search requires tenant_investigator or tenant_admin.")
+
+        connection = _resolve_tenant_data_hub_connection_or_404(db, tenant_id)
+        path = "/api/graph/customer/" + urllib.parse.quote(customer_key.strip(), safe="") + "/transactions"
+        return _proxy_data_hub_json(
+            connection,
+            path,
+            {
+                "limit": limit,
+            },
+        )
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")
 

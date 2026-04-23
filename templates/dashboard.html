@@ -81,11 +81,7 @@
         {% if has_tenant_management_access %}
         <section class="section">
           <h2>Tenant Management</h2>
-          <p>
-            <a class="icon-link" href="/ui/admin/tenants" title="Open Tenant Management" aria-label="Open Tenant Management">
-              <img src="/static/images/tenant_management.png" alt="Tenant Management">
-            </a>
-          </p>
+          <p><a href="/ui/admin/tenants">Open Tenant Management</a></p>
         </section>
         {% endif %}
 
@@ -97,23 +93,25 @@
         </section>
         {% endif %}
 
+        {% if has_red_flag_workspace_access %}
         <section class="section">
           <h2>Red Flag Workspace</h2>
-          <p>
-            <a class="icon-link" href="/ui/red-flags/workspace" title="Open Red Flags Workspace" aria-label="Open Red Flags Workspace">
-              <img src="/static/images/red_flag.jpeg" alt="Red Flags Workspace">
-            </a>
-          </p>
+          <p><a href="/ui/red-flags/workspace">Open Red Flag Workspace</a></p>
         </section>
+        {% endif %}
 
         <section class="section">
           <h2>Reporting</h2>
-          <p>
-            <a class="icon-link" href="/ui/operational-reporting" title="Open Reporting" aria-label="Open Reporting">
-              <img src="/static/images/reporting.jpeg" alt="Reporting">
-            </a>
-          </p>
+          <p><a href="/ui/operational-reporting">Open Reporting</a></p>
         </section>
+
+        {% if has_entity_search_access %}
+        <section class="section">
+          <h2>Entity Search</h2>
+          <p><a href="/ui/entity-search">Customer Search</a></p>
+          <p><a href="/ui/exposure-search">Exposure Search</a></p>
+        </section>
+        {% endif %}
       </div>
 
       <form method="post" action="/logout">

@@ -1,5 +1,6 @@
 code,scope,description
 tenant_admin,tenant,Tenant role: tenant_admin
+tenant_investigator,tenant,Tenant role: tenant_investigator
 red_flag_analyst,tenant,Tenant role: red_flag_analyst
 red_flag_approver,tenant,Tenant role: red_flag_approver
 read_only_audit,tenant,Tenant role: read_only_audit

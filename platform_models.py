@@ -79,6 +79,26 @@ class TenantModuleEntitlement(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class TenantDataHubConnection(Base):
+    __tablename__ = "ten_data_hub_connections"
+    __table_args__ = (UniqueConstraint("tenant_id", name="uq_tenant_data_hub_connections_tenant_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("ten_tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    base_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    auth_type: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
+    auth_header_name: Mapped[str | None] = mapped_column(String(128))
+    auth_secret_ref: Mapped[str | None] = mapped_column(String(255))
+    connect_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    read_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_status: Mapped[str | None] = mapped_column(String(32))
+    last_test_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class WorkflowDefinition(Base):
     __tablename__ = "wf_definitions"
     __table_args__ = (UniqueConstraint("module_code", "entity_type", "tenant_id", name="uq_workflow_definitions_scope"),)

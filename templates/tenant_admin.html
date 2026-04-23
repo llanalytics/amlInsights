@@ -221,6 +221,56 @@
       </details>
 
       <details class="panel">
+        <summary class="accordion-title">Data Hub Connection</summary>
+        <div class="accordion-body">
+        <div class="grid" id="dataHubTenantSelectRow" style="margin-bottom:0.6rem;">
+          <label>Select Tenant
+            <select id="dataHubTenantSelect" onchange="onDataHubTenantSelectionChanged()">
+              <option value="">-- Select tenant --</option>
+            </select>
+          </label>
+        </div>
+        <p class="subtle" id="dataHubTenantLabel">Select a tenant to view Data Hub connection settings.</p>
+        <div class="grid">
+          <label>Base URL
+            <input id="dataHubBaseUrl" placeholder="https://datahub.example.com" disabled>
+          </label>
+          <label>Auth Type
+            <select id="dataHubAuthType" disabled>
+              <option value="none">none</option>
+              <option value="bearer_token">bearer_token</option>
+              <option value="api_key">api_key</option>
+              <option value="custom_header">custom_header</option>
+            </select>
+          </label>
+          <label>Auth Header Name
+            <input id="dataHubAuthHeaderName" placeholder="x-api-key" disabled>
+          </label>
+          <label>Auth Secret Ref
+            <input id="dataHubAuthSecretRef" placeholder="secret-ref-or-placeholder" disabled>
+          </label>
+          <label>Connect Timeout (sec)
+            <input id="dataHubConnectTimeout" type="number" min="1" max="120" value="10" disabled>
+          </label>
+          <label>Read Timeout (sec)
+            <input id="dataHubReadTimeout" type="number" min="1" max="300" value="20" disabled>
+          </label>
+        </div>
+        <div class="checkbox-inline" style="margin-top:0.6rem;">
+          <input id="dataHubIsActive" type="checkbox" checked disabled>
+          <span>Connection Active</span>
+        </div>
+        <div style="margin-top:0.6rem; display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.6rem;">
+          <button class="secondary" id="refreshDataHubBtn" onclick="loadDataHubConnection()" disabled>Refresh Connection</button>
+          <button id="saveDataHubBtn" onclick="saveDataHubConnection()" disabled>Save Connection</button>
+          <button class="secondary" id="testDataHubBtn" onclick="testDataHubConnection()" disabled>Test Connection</button>
+        </div>
+        <p class="subtle" id="dataHubLastTest" style="margin-top:0.45rem;"></p>
+        <div id="dataHubMsg" class="msg"></div>
+        </div>
+      </details>
+
+      <details class="panel">
         <summary class="accordion-title">Workflow Administration</summary>
         <div class="accordion-body">
         <p class="subtle">Configure draft workflow policy, role-to-state mapping, and state-to-screen capability mapping.</p>
@@ -297,6 +347,7 @@
       const CURRENT_USER_EMAIL = {{ user | tojson }};
       const FALLBACK_TENANT_ROLES = [
         "tenant_admin",
+        "tenant_investigator",
         "red_flag_analyst",
         "red_flag_approver",
         "read_only_audit",
@@ -315,6 +366,7 @@
       let availableTenantRoles = [...FALLBACK_TENANT_ROLES];
       let selectedTenantId = null;
       let selectedTenantName = null;
+      let selectedDataHubConnection = null;
       let tenantUserModalMode = "add";
       let tenantUserModalOriginalEmail = null;
       let workflowEditor = { active: null, draft: null, states: [], transitions: [] };
@@ -384,6 +436,115 @@
         if (!m) return;
         m.textContent = text || "";
         m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      function dataHubMsg(text, bad=false) {
+        const m = el("dataHubMsg");
+        if (!m) return;
+        m.textContent = text || "";
+        m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      function setDataHubEditability(enabled) {
+        const editable = Boolean(enabled && IS_PLATFORM_ADMIN);
+        el("dataHubBaseUrl").disabled = !editable;
+        el("dataHubAuthType").disabled = !editable;
+        el("dataHubAuthHeaderName").disabled = !editable;
+        el("dataHubAuthSecretRef").disabled = !editable;
+        el("dataHubConnectTimeout").disabled = !editable;
+        el("dataHubReadTimeout").disabled = !editable;
+        el("dataHubIsActive").disabled = !editable;
+        el("saveDataHubBtn").disabled = !editable;
+        el("testDataHubBtn").disabled = !editable;
+        el("refreshDataHubBtn").disabled = !enabled;
+      }
+      function resetDataHubForm() {
+        selectedDataHubConnection = null;
+        el("dataHubBaseUrl").value = "";
+        el("dataHubAuthType").value = "none";
+        el("dataHubAuthHeaderName").value = "";
+        el("dataHubAuthSecretRef").value = "";
+        el("dataHubConnectTimeout").value = "10";
+        el("dataHubReadTimeout").value = "20";
+        el("dataHubIsActive").checked = true;
+        el("dataHubLastTest").textContent = "";
+        dataHubMsg("");
+      }
+      function renderDataHubConnection(connection) {
+        selectedDataHubConnection = connection || null;
+        if (!connection) {
+          resetDataHubForm();
+          dataHubMsg("No Data Hub connection configured for this tenant yet.");
+          return;
+        }
+        el("dataHubBaseUrl").value = connection.base_url || "";
+        el("dataHubAuthType").value = connection.auth_type || "none";
+        el("dataHubAuthHeaderName").value = connection.auth_header_name || "";
+        el("dataHubAuthSecretRef").value = connection.auth_secret_ref || "";
+        el("dataHubConnectTimeout").value = String(connection.connect_timeout_seconds || 10);
+        el("dataHubReadTimeout").value = String(connection.read_timeout_seconds || 20);
+        el("dataHubIsActive").checked = Boolean(connection.is_active);
+        const testedAt = connection.last_tested_at ? `Last tested: ${connection.last_tested_at}` : "Last tested: never";
+        const testedStatus = connection.last_test_status ? ` (${connection.last_test_status})` : "";
+        const testedMsg = connection.last_test_message ? ` - ${connection.last_test_message}` : "";
+        el("dataHubLastTest").textContent = `${testedAt}${testedStatus}${testedMsg}`;
+        dataHubMsg("Data Hub connection loaded.");
+      }
+      function getDataHubPayloadFromForm() {
+        return {
+          base_url: String(el("dataHubBaseUrl").value || "").trim(),
+          auth_type: String(el("dataHubAuthType").value || "none").trim(),
+          auth_header_name: String(el("dataHubAuthHeaderName").value || "").trim() || null,
+          auth_secret_ref: String(el("dataHubAuthSecretRef").value || "").trim() || null,
+          connect_timeout_seconds: Number(el("dataHubConnectTimeout").value || 10),
+          read_timeout_seconds: Number(el("dataHubReadTimeout").value || 20),
+          is_active: Boolean(el("dataHubIsActive").checked)
+        };
+      }
+      async function loadDataHubConnection() {
+        if (!selectedTenantId) {
+          dataHubMsg("Select a tenant first.", true);
+          return;
+        }
+        try {
+          const data = await callTenant("/api/tenant-admin/data-hub-connection", selectedTenantId, "GET");
+          renderDataHubConnection(data);
+        } catch (e) {
+          dataHubMsg(`Data Hub connection load failed: ${e.message}`, true);
+        }
+      }
+      async function saveDataHubConnection() {
+        if (!selectedTenantId) {
+          dataHubMsg("Select a tenant first.", true);
+          return;
+        }
+        if (!IS_PLATFORM_ADMIN) {
+          dataHubMsg("Only platform admins can update Data Hub connection settings.", true);
+          return;
+        }
+        try {
+          const payload = getDataHubPayloadFromForm();
+          const saved = await call(`/api/admin/tenants/${selectedTenantId}/data-hub-connection`, "PUT", payload);
+          renderDataHubConnection(saved);
+          dataHubMsg("Data Hub connection saved.");
+        } catch (e) {
+          dataHubMsg(`Data Hub connection save failed: ${e.message}`, true);
+        }
+      }
+      async function testDataHubConnection() {
+        if (!selectedTenantId) {
+          dataHubMsg("Select a tenant first.", true);
+          return;
+        }
+        if (!IS_PLATFORM_ADMIN) {
+          dataHubMsg("Only platform admins can run connection tests.", true);
+          return;
+        }
+        try {
+          const result = await call(`/api/admin/tenants/${selectedTenantId}/data-hub-connection/test`, "POST");
+          dataHubMsg(`Connection test ${result.status}: ${result.message}`, result.status !== "ok");
+          await loadDataHubConnection();
+        } catch (e) {
+          dataHubMsg(`Connection test failed: ${e.message}`, true);
+        }
       }
       function setWorkflowButtonsEnabled(enabled) {
         el("wfLoadBtn").disabled = !enabled;
@@ -738,12 +899,17 @@
         selectedTenantName = name;
         el("selectedTenantLabel").textContent = `Managing users for tenant #${id}: ${name}`;
         el("selectedBusinessUnitTenantLabel").textContent = `Managing business units for tenant #${id}: ${name}`;
+        el("dataHubTenantLabel").textContent = `Data Hub connection for tenant #${id}: ${name}`;
         el("refreshUsersBtn").disabled = false;
         el("addUserBtn").disabled = false;
         el("refreshBusinessUnitsBtn").disabled = false;
         el("addBusinessUnitBtn").disabled = false;
+        setDataHubEditability(true);
         if (IS_PLATFORM_ADMIN && el("tenantUserTenantSelect").value !== String(id)) {
           el("tenantUserTenantSelect").value = String(id);
+        }
+        if (IS_PLATFORM_ADMIN && el("dataHubTenantSelect") && el("dataHubTenantSelect").value !== String(id)) {
+          el("dataHubTenantSelect").value = String(id);
         }
         if (!IS_PLATFORM_ADMIN) {
           el("tenantReadOnlyLabel").textContent = `Tenant: ${name}`;
@@ -766,16 +932,38 @@
           el("addBusinessUnitBtn").disabled = true;
           el("tenantUsersRows").innerHTML = "";
           el("businessUnitsRows").innerHTML = "";
+          el("dataHubTenantLabel").textContent = "Select a tenant to view Data Hub connection settings.";
+          resetDataHubForm();
+          setDataHubEditability(false);
           resetWorkflowEditorState();
           setWorkflowButtonsEnabled(false);
           return;
         }
         const tenantName = select.options[select.selectedIndex]?.text || `Tenant ${tenantId}`;
         setSelectedTenant(tenantId, tenantName);
+        if (el("dataHubTenantSelect")) {
+          el("dataHubTenantSelect").value = String(tenantId);
+        }
         await loadAvailableTenantRoles();
         await loadTenantUsers();
         await loadBusinessUnits();
+        await loadDataHubConnection();
         await loadWorkflowActive();
+      }
+      async function onDataHubTenantSelectionChanged() {
+        const select = el("dataHubTenantSelect");
+        const tenantId = select.value ? Number(select.value) : null;
+        if (!tenantId) {
+          if (el("tenantUserTenantSelect")) {
+            el("tenantUserTenantSelect").value = "";
+          }
+          await onTenantSelectionChanged();
+          return;
+        }
+        if (el("tenantUserTenantSelect")) {
+          el("tenantUserTenantSelect").value = String(tenantId);
+        }
+        await onTenantSelectionChanged();
       }
 
       async function createTenant() {
@@ -1052,13 +1240,23 @@
           const data = await call("/api/admin/tenants", "GET");
           const tbody = el("rows");
           const select = el("tenantUserTenantSelect");
+          const dataHubSelect = el("dataHubTenantSelect");
           tbody.innerHTML = "";
           select.innerHTML = '<option value="">-- Select tenant --</option>';
+          if (dataHubSelect) {
+            dataHubSelect.innerHTML = '<option value="">-- Select tenant --</option>';
+          }
           for (const row of data) {
             const opt = document.createElement("option");
             opt.value = String(row.id);
             opt.textContent = row.name;
             select.appendChild(opt);
+            if (dataHubSelect) {
+              const dhOpt = document.createElement("option");
+              dhOpt.value = String(row.id);
+              dhOpt.textContent = row.name;
+              dataHubSelect.appendChild(dhOpt);
+            }
 
             const tr = document.createElement("tr");
             tr.innerHTML = `
@@ -1081,6 +1279,7 @@
               loadAvailableTenantRoles();
               loadTenantUsers();
               loadBusinessUnits();
+              loadDataHubConnection();
               loadWorkflowActive();
             };
 
@@ -1108,6 +1307,9 @@
             const exists = data.some(t => t.id === selectedTenantId);
             if (exists) {
               select.value = String(selectedTenantId);
+              if (dataHubSelect) {
+                dataHubSelect.value = String(selectedTenantId);
+              }
             } else {
               onTenantSelectionChanged();
             }
@@ -1122,13 +1324,23 @@
         try {
           const tenants = Array.isArray(ACCESSIBLE_TENANTS) ? ACCESSIBLE_TENANTS : [];
           const select = el("tenantUserTenantSelect");
+          const dataHubSelect = el("dataHubTenantSelect");
           if (IS_PLATFORM_ADMIN) {
             select.innerHTML = '<option value="">-- Select tenant --</option>';
+            if (dataHubSelect) {
+              dataHubSelect.innerHTML = '<option value="">-- Select tenant --</option>';
+            }
             for (const t of tenants) {
               const opt = document.createElement("option");
               opt.value = String(t.id);
               opt.textContent = t.name;
               select.appendChild(opt);
+              if (dataHubSelect) {
+                const dhOpt = document.createElement("option");
+                dhOpt.value = String(t.id);
+                dhOpt.textContent = t.name;
+                dataHubSelect.appendChild(dhOpt);
+              }
             }
           }
 
@@ -1139,6 +1351,7 @@
               await loadAvailableTenantRoles();
               await loadTenantUsers();
               await loadBusinessUnits();
+              await loadDataHubConnection();
               await loadWorkflowActive();
               if (tenants.length > 1) {
                 msg(`Using tenant '${tenant.name}' for this user context.`, false);
@@ -1149,19 +1362,23 @@
             }
           }
         } catch (e) {
-          el("selectedTenantLabel").textContent = "Tenant resolution failed.";
-          msg(`Failed to load accessible tenants: ${e.message}`, true);
-        }
+        el("selectedTenantLabel").textContent = "Tenant resolution failed.";
+        msg(`Failed to load accessible tenants: ${e.message}`, true);
+      }
       }
 
       if (IS_PLATFORM_ADMIN) {
         el("tenantSelectRow").style.display = "grid";
+        el("dataHubTenantSelectRow").style.display = "grid";
+        setDataHubEditability(false);
         setWorkflowButtonsEnabled(false);
         loadTenants();
       } else {
         el("tenantSelectRow").style.display = "none";
+        el("dataHubTenantSelectRow").style.display = "none";
         el("selectedTenantLabel").textContent = "Resolving tenant from your login context...";
         msg("Tenant list is hidden because your account is not a platform admin.");
+        setDataHubEditability(false);
         setWorkflowButtonsEnabled(false);
         loadAccessibleTenantOptions();
       }

@@ -1,0 +1,109 @@
+<details class="panel" open>
+  <summary class="accordion-title">Customer Screen</summary>
+  <div class="accordion-body">
+    <div class="grid" style="grid-template-columns: repeat(5, minmax(140px, 1fr));">
+      <div>
+        <div class="subtle">Customer Key</div>
+        <div id="customerScreenCustomerKey">-</div>
+      </div>
+      <div>
+        <div class="subtle">Name</div>
+        <div id="customerScreenName">-</div>
+      </div>
+      <div>
+        <div class="subtle">Business Unit</div>
+        <div id="customerScreenBusinessUnit">-</div>
+      </div>
+      <div>
+        <div class="subtle">Segment</div>
+        <div id="customerScreenSegment">-</div>
+      </div>
+      <div>
+        <div class="subtle">Location</div>
+        <div id="customerScreenLocation">-</div>
+      </div>
+    </div>
+    <div class="subtle" id="customerScreenSummary" style="margin-top:0.5rem;">Load a customer graph to populate details.</div>
+  </div>
+</details>
+
+<details class="panel" open>
+  <summary class="accordion-title">Customer Graph</summary>
+  <div class="accordion-body">
+    <div class="customer-graph-layout">
+      <div class="customer-graph-main">
+        <div style="display:grid; grid-template-columns: repeat(3, 140px); gap:0.5rem; margin-bottom:0.6rem;">
+          <button class="secondary" onclick="zoomGraphIn()">Zoom In</button>
+          <button class="secondary" onclick="zoomGraphOut()">Zoom Out</button>
+          <button class="secondary" onclick="resetGraphView()">Reset View</button>
+        </div>
+        <div id="graph"></div>
+      </div>
+      <div class="customer-graph-side">
+        <div class="subtle" id="nodeDetailsHint">Click a non-surrogate node or an edge to view attributes. Double-click a node to expand/collapse links.</div>
+        <div id="nodeDetailsContainer" style="margin-top:0.5rem;"></div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<details class="panel" open>
+  <summary class="accordion-title">Customer Transactions</summary>
+  <div class="accordion-body">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+      <div class="subtle" id="txnTableHint">Transactions from dh_fact_cash for this customer's primary account relationships.</div>
+      <button class="secondary" style="width:auto; padding:0.45rem 0.8rem;" onclick="clearCustomerTransactionFilters()">Clear Filters</button>
+    </div>
+    <div class="txn-table-wrap" style="margin-top:0.5rem;">
+      <table id="txnTable">
+        <thead>
+          <tr>
+            <th>transaction_date</th>
+            <th>account_key</th>
+            <th>aml_classification</th>
+            <th>direction</th>
+            <th>amount</th>
+            <th>country_code_2</th>
+            <th>currency_code</th>
+            <th>counterparty_name</th>
+          </tr>
+          <tr>
+            <th>
+              <input id="txnFilterTransactionDateStart" type="date" placeholder="start date">
+              <input id="txnFilterTransactionDateEnd" type="date" placeholder="end date">
+            </th>
+            <th>
+              <input id="txnFilterAccountKey" placeholder="text">
+              <select id="txnSelectAccountKey" multiple size="3"></select>
+            </th>
+            <th>
+              <input id="txnFilterAmlClassification" placeholder="text">
+              <select id="txnSelectAmlClassification" multiple size="3"></select>
+            </th>
+            <th>
+              <input id="txnFilterDirection" placeholder="text">
+              <select id="txnSelectDirection" multiple size="3"></select>
+            </th>
+            <th>
+              <input id="txnFilterAmount" placeholder="min or min-max">
+              <select id="txnSelectAmount" multiple size="3"></select>
+            </th>
+            <th>
+              <input id="txnFilterCountryCode2" placeholder="text">
+              <select id="txnSelectCountryCode2" multiple size="3"></select>
+            </th>
+            <th>
+              <input id="txnFilterCurrencyCode" placeholder="text">
+              <select id="txnSelectCurrencyCode" multiple size="3"></select>
+            </th>
+            <th>
+              <input id="txnFilterCounterpartyName" placeholder="text">
+              <select id="txnSelectCounterpartyName" multiple size="3"></select>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="txnRows"></tbody>
+      </table>
+    </div>
+  </div>
+</details>

@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <style>
+      body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: linear-gradient(135deg, #eef5fb, #f6eee3); color: #1f2933; }
+      main { max-width: 1800px; margin: 1.2rem auto; padding: 0.8rem 1rem; }
+      .panel { background: rgba(255,255,255,0.95); border-radius: 14px; box-shadow: 0 14px 30px rgba(18,34,49,0.14); padding: 1rem; margin-bottom: 1rem; }
+      details.panel { padding: 0; overflow: hidden; }
+      .accordion-title {
+        list-style: none;
+        cursor: pointer;
+        padding: 1rem;
+        font-weight: 700;
+        border-bottom: 1px solid #d8e1e9;
+        user-select: none;
+      }
+      .accordion-title::-webkit-details-marker { display: none; }
+      .accordion-title::after {
+        content: "▾";
+        float: right;
+        color: #4d6478;
+      }
+      details.panel:not([open]) .accordion-title { border-bottom: none; }
+      details.panel:not([open]) .accordion-title::after { content: "▸"; }
+      .accordion-body { padding: 1rem; }
+      .grid { display:grid; grid-template-columns: repeat(4,minmax(160px,1fr)); gap:0.6rem; }
+      label { font-size:0.9rem; display:block; }
+      input, select, button { width:100%; box-sizing:border-box; margin-top:0.2rem; padding:0.55rem; border-radius:8px; border:1px solid #b7c7d6; font-family: inherit; }
+      button { border:none; background:#1f5f8b; color:#fff; cursor:pointer; }
+      button.secondary { background:#5f7489; }
+      .msg { min-height:1.2rem; color:#1f5f8b; margin-top: 0.5rem; }
+      .subtle { color:#4d6478; font-size:0.9rem; }
+      table { width:100%; border-collapse: collapse; }
+      th, td { text-align:left; padding:0.45rem; border-bottom:1px solid #d8e1e9; vertical-align: top; font-size:0.93rem; }
+      thead input { width: 100%; box-sizing: border-box; margin: 0; padding: 0.35rem; font-size: 0.82rem; }
+      thead select {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 0.25rem;
+        padding: 0.2rem;
+        font-size: 0.76rem;
+        min-height: 72px;
+      }
+      #graph { width: 100%; height: 74vh; min-height: 620px; border: 1px solid #d8e1e9; border-radius: 10px; background: #fff; }
+      .txn-table-wrap {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 46vh;
+        border: 1px solid #d8e1e9;
+        border-radius: 10px;
+        background: #fff;
+      }
+      #txnTable { min-width: 1100px; }
+      #txnTable thead th { background: #f7fbff; }
+      .customer-graph-layout {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 0.8rem;
+        align-items: start;
+      }
+      .customer-graph-main { min-width: 0; }
+      .customer-graph-side {
+        min-width: 0;
+        border: 1px solid #d8e1e9;
+        border-radius: 10px;
+        padding: 0.7rem;
+        background: #fbfdff;
+        height: calc(74vh + 46px);
+        min-height: 666px;
+        overflow: auto;
+      }
+      @media (max-width: 900px) {
+        .grid { grid-template-columns: 1fr; }
+        .customer-graph-layout { grid-template-columns: 1fr; }
+        .customer-graph-side { height: auto; min-height: 280px; }
+        #graph { height: 520px; min-height: 520px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="panel">
+        <h1>Entity Search</h1>
+        <p>Signed in as <strong>{{ user }}</strong>. Search customers by name, then load a customer-centric graph.</p>
+        <p><a href="/dashboard">Back to dashboard</a></p>
+      </div>
+
+      <details class="panel" open>
+        <summary class="accordion-title">Customer Search</summary>
+        <div class="accordion-body">
+        <p class="subtle" id="tenantResolvedLabel"></p>
+        <div class="grid">
+          <label>Customer Name Search
+            <input id="searchText" placeholder="Type a customer name">
+          </label>
+          <label>Business Unit (optional)
+            <input id="businessUnit" placeholder="Example: Retail Banking">
+          </label>
+          <label>Customer Segment (optional)
+            <input id="customerSegment" placeholder="Individual or Organization">
+          </label>
+          <label>Result Limit
+            <input id="resultLimit" type="number" min="1" max="100" value="20">
+          </label>
+          <label>Graph Hops
+            <input id="hops" type="number" min="1" max="5" value="2">
+          </label>
+          <label>Max Nodes
+            <input id="maxNodes" type="number" min="10" max="2000" value="500">
+          </label>
+          <label>Max Edges
+            <input id="maxEdges" type="number" min="10" max="5000" value="2000">
+          </label>
+        </div>
+        <div style="margin-top:0.7rem; display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem;">
+          <button onclick="runSearch()">Search Customers</button>
+          <button class="secondary" onclick="clearGraph()">Clear Graph</button>
+        </div>
+        <div id="msg" class="msg"></div>
+        </div>
+      </details>
+
+      <details class="panel" open>
+        <summary class="accordion-title">Search Results</summary>
+        <div class="accordion-body">
+        <p class="subtle">Click "Load Graph" for the selected customer.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Customer Key</th>
+              <th>Name</th>
+              <th>Business Unit</th>
+              <th>Segment</th>
+              <th>Location</th>
+              <th>Score</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="resultsRows"></tbody>
+        </table>
+        </div>
+      </details>
+
+      {% include "components/customer_screen.html" %}
+    </main>
+
+    <script src="https://unpkg.com/cytoscape@3.30.0/dist/cytoscape.min.js"></script>
+    <script>
+      const CURRENT_USER_EMAIL = {{ default_user_email | tojson }};
+      const ACCESSIBLE_TENANTS = {{ accessible_tenants | tojson }};
+      const DEFAULT_TENANT_ID = {{ default_tenant_id | tojson }};
+      const DEFAULT_TENANT_NAME = (ACCESSIBLE_TENANTS || []).find((t) => Number(t.id) === Number(DEFAULT_TENANT_ID))?.name || "";
+      let cy = null;
+      const EXPAND_HINT_THRESHOLD = 3;
+      const SURROGATE_TYPES = new Set(["SurrogateName", "SurrogateAddress", "SurrogateNameAddress"]);
+      let currentCustomer = null;
+      let currentCustomerTransactions = [];
+      let initialNodeIds = new Set();
+      let initialEdgeIds = new Set();
+      const nodeOwners = new Map();
+      const edgeOwners = new Map();
+      const expandedByNode = new Map();
+      let singleTapTimer = null;
+      const DOUBLE_TAP_MS = 450;
+
+      function el(id) { return document.getElementById(id); }
+      function msg(text, bad=false) {
+        const m = el("msg");
+        m.textContent = text || "";
+        m.style.color = bad ? "#8b1f1f" : "#1f5f8b";
+      }
+      function headers() {
+        return {
+          "Content-Type": "application/json",
+          "x-user-email": String(CURRENT_USER_EMAIL || "").trim().toLowerCase()
+        };
+      }
+      async function call(path) {
+        const res = await fetch(path, { method: "GET", headers: headers() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+        return data;
+      }
+      function svgDataUrl(svg) {
+        return "data:image/svg+xml;utf8," + encodeURIComponent(svg);
+      }
+      function iconForNodeType(nodeType) {
+        const t = String(nodeType || "").trim();
+        const icons = {
+          Customer: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='20' r='11' fill='#ffffff'/><path d='M12 54c0-10 8-17 20-17s20 7 20 17' fill='#ffffff'/></svg>`,
+          AssociatedParty: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='22' cy='20' r='8' fill='#ffffff'/><circle cx='42' cy='20' r='8' fill='#ffffff'/><path d='M10 50c0-9 6-14 12-14s12 5 12 14' fill='#ffffff'/><path d='M30 50c0-9 6-14 12-14s12 5 12 14' fill='#ffffff'/></svg>`,
+          Account: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='14' width='48' height='36' rx='4' fill='#ffffff'/><rect x='12' y='22' width='40' height='4' fill='#1f5f8b'/><rect x='12' y='32' width='22' height='4' fill='#1f5f8b'/></svg>`,
+          CounterpartyAccount: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='12' width='48' height='40' rx='4' fill='#ffffff'/><path d='M10 30h44' stroke='#8b5f1f' stroke-width='4'/><circle cx='45' cy='42' r='4' fill='#8b5f1f'/></svg>`,
+          OfacSdn: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='26' fill='#ffffff'/><path d='M20 20l24 24M44 20L20 44' stroke='#9b1c1c' stroke-width='6' stroke-linecap='round'/></svg>`,
+          SurrogateName: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='8' width='48' height='48' rx='6' fill='#ffffff'/><text x='32' y='40' text-anchor='middle' font-size='28' font-family='Arial' fill='#6b7280'>N</text></svg>`,
+          SurrogateAddress: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='8' width='48' height='48' rx='6' fill='#ffffff'/><text x='32' y='40' text-anchor='middle' font-size='28' font-family='Arial' fill='#6b7280'>A</text></svg>`,
+          SurrogateNameAddress: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='8' width='48' height='48' rx='6' fill='#ffffff'/><text x='32' y='40' text-anchor='middle' font-size='22' font-family='Arial' fill='#6b7280'>N+A</text></svg>`,
+          PanamaNode: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><polygon points='32,8 56,24 56,40 32,56 8,40 8,24' fill='#ffffff'/></svg>`,
+          Branch: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><polygon points='8,24 32,10 56,24' fill='#ffffff'/><rect x='12' y='24' width='40' height='26' fill='#ffffff'/><rect x='28' y='30' width='8' height='20' fill='#1f5f8b'/></svg>`,
+          Household: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><path d='M8 30L32 10l24 20' stroke='#ffffff' stroke-width='5' fill='none'/><rect x='14' y='30' width='36' height='22' fill='#ffffff'/></svg>`
+        };
+        return svgDataUrl(icons[t] || `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='24' fill='#ffffff'/></svg>`);
+      }
+      function selectedTenantId() {
+        return Number(DEFAULT_TENANT_ID || 0);
+      }
+      function collapseInitialGraph(payload, threshold=3) {
+        const elements = (payload && payload.elements) ? payload.elements : { nodes: [], edges: [] };
+        const nodes = Array.isArray(elements.nodes) ? elements.nodes : [];
+        const edges = Array.isArray(elements.edges) ? elements.edges : [];
+        const centerNode = String(payload && payload.center_node ? payload.center_node : "");
+
+        const neighbors = {};
+        for (const e of edges) {
+          const d = e.data || {};
+          const src = String(d.source || "");
+          const dst = String(d.target || "");
+          if (!src || !dst) continue;
+          if (!neighbors[src]) neighbors[src] = new Set();
+          if (!neighbors[dst]) neighbors[dst] = new Set();
+          neighbors[src].add(dst);
+          neighbors[dst].add(src);
+        }
+
+        const disallowPairs = new Set();
+        for (const nodeId of Object.keys(neighbors)) {
+          const arr = Array.from(neighbors[nodeId]).sort();
+          if (arr.length <= threshold) continue;
+          let keep = arr.slice(0, threshold);
+          if (centerNode && arr.includes(centerNode) && !keep.includes(centerNode)) {
+            keep[keep.length - 1] = centerNode;
+          }
+          const keepSet = new Set(keep);
+          for (const nb of arr) {
+            if (keepSet.has(nb)) continue;
+            disallowPairs.add(`${nodeId}|${nb}`);
+            disallowPairs.add(`${nb}|${nodeId}`);
+          }
+        }
+
+        const keptEdges = [];
+        for (const e of edges) {
+          const d = e.data || {};
+          const src = String(d.source || "");
+          const dst = String(d.target || "");
+          if (!src || !dst) continue;
+          if (disallowPairs.has(`${src}|${dst}`)) continue;
+          keptEdges.push(e);
+        }
+
+        // Keep only the connected component reachable from the center node.
+        const reachable = new Set();
+        if (centerNode) {
+          const adj = {};
+          for (const e of keptEdges) {
+            const d = e.data || {};
+            const src = String(d.source || "");
+            const dst = String(d.target || "");
+            if (!src || !dst) continue;
+            if (!adj[src]) adj[src] = new Set();
+            if (!adj[dst]) adj[dst] = new Set();
+            adj[src].add(dst);
+            adj[dst].add(src);
+          }
+          const queue = [centerNode];
+          reachable.add(centerNode);
+          while (queue.length) {
+            const cur = queue.shift();
+            const nbs = adj[cur] || new Set();
+            for (const nb of nbs) {
+              if (reachable.has(nb)) continue;
+              reachable.add(nb);
+              queue.push(nb);
+            }
+          }
+        } else {
+          for (const e of keptEdges) {
+            const d = e.data || {};
+            const src = String(d.source || "");
+            const dst = String(d.target || "");
+            if (src) reachable.add(src);
+            if (dst) reachable.add(dst);
+          }
+        }
+
+        const reachableEdges = keptEdges.filter((e) => {
+          const d = e.data || {};
+          const src = String(d.source || "");
+          const dst = String(d.target || "");
+          return reachable.has(src) && reachable.has(dst);
+        });
+
+        const keptNodes = [];
+        for (const n of nodes) {
+          const d = n.data || {};
+          const nid = String(d.id || "");
+          if (!nid) continue;
+          const degreeTotal = neighbors[nid] ? neighbors[nid].size : 0;
+          const outNode = {
+            data: {
+              ...d,
+              degree_total: Number(d.degree_total || degreeTotal),
+            },
+          };
+          if (reachable.has(nid)) keptNodes.push(outNode);
+        }
+
+        return {
+          ...payload,
+          elements: {
+            nodes: keptNodes,
+            edges: reachableEdges,
+          },
+          node_count: keptNodes.length,
+          edge_count: reachableEdges.length,
+        };
+      }
+      function nodeVisibleDegree(node) {
+        if (!node) return 0;
+        const ids = new Set();
+        for (const e of node.connectedEdges()) {
+          const src = String(e.data("source") || "");
+          const dst = String(e.data("target") || "");
+          if (src && src !== node.id()) ids.add(src);
+          if (dst && dst !== node.id()) ids.add(dst);
+        }
+        return ids.size;
+      }
+      function hiddenNeighborCount(node) {
+        const total = Number(node.data("degree_total") || 0);
+        const visible = nodeVisibleDegree(node);
+        return Math.max(0, total - visible);
+      }
+      function addOwner(mapObj, key, owner) {
+        const k = String(key || "");
+        const o = String(owner || "");
+        if (!k || !o) return;
+        if (!mapObj.has(k)) mapObj.set(k, new Set());
+        mapObj.get(k).add(o);
+      }
+      function removeOwner(mapObj, key, owner) {
+        const k = String(key || "");
+        const o = String(owner || "");
+        if (!k || !o || !mapObj.has(k)) return;
+        const owners = mapObj.get(k);
+        owners.delete(o);
+        if (!owners.size) mapObj.delete(k);
+      }
+      function refreshNodeLabelsWithExpansionHints() {
+        if (!cy) return;
+        for (const n of cy.nodes()) {
+          const base = String(n.data("base_label") || n.data("label") || n.id());
+          const hidden = hiddenNeighborCount(n);
+          if (hidden > 0 && Number(n.data("degree_total") || 0) > EXPAND_HINT_THRESHOLD) {
+            n.data("display_label", `${base} (+${hidden})`);
+          } else {
+            n.data("display_label", base);
+          }
+        }
+      }
+      async function expandNodeNeighbors(nodeId) {
+        if (!cy || !nodeId) return;
+        const tenantId = selectedTenantId();
+        const existingIds = cy.nodes().map((n) => n.id());
+        const params = new URLSearchParams();
+        params.set("tenant_id", String(tenantId));
+        params.set("node_id", nodeId);
+        params.set("limit", "50");
+        params.set("offset", "0");
+        params.set("exclude_node_ids", existingIds.join(","));
+        const payload = await call("/api/entity-search/node-neighbors?" + params.toString());
+        const nodes = ((payload.elements || {}).nodes || []).map((n) => n.data || {});
+        const edges = ((payload.elements || {}).edges || []).map((e) => e.data || {});
+        let addedCount = 0;
+        const expandedNodes = new Set();
+        const expandedEdges = new Set();
+        for (const nd of nodes) {
+          const nid = String(nd.id || "");
+          if (!nid) continue;
+          expandedNodes.add(nid);
+          if (cy.getElementById(nid).length > 0) {
+            addOwner(nodeOwners, nid, nodeId);
+            continue;
+          }
+          const nodeType = String(nd.node_type || "Node");
+          const baseLabel = String(nd.label || nd.id || "");
+          cy.add({
+            group: "nodes",
+            data: {
+              ...nd,
+              base_label: baseLabel,
+              display_label: baseLabel,
+              icon_svg: iconForNodeType(nodeType),
+            },
+          });
+          addOwner(nodeOwners, nid, nodeId);
+          addedCount += 1;
+        }
+        for (const ed of edges) {
+          const eid = String(ed.id || "");
+          if (!eid) continue;
+          expandedEdges.add(eid);
+          if (cy.getElementById(eid).length > 0) {
+            addOwner(edgeOwners, eid, nodeId);
+            continue;
+          }
+          cy.add({
+            group: "edges",
+            data: ed,
+          });
+          addOwner(edgeOwners, eid, nodeId);
+        }
+        expandedByNode.set(String(nodeId), { nodes: expandedNodes, edges: expandedEdges });
+        if (addedCount > 0) {
+          cy.layout({ name: "cose", animate: false, fit: false, padding: 20 }).run();
+        }
+        refreshNodeLabelsWithExpansionHints();
+        return payload;
+      }
+      async function toggleNodeExpansion(node) {
+        if (!cy || !node || !node.length) return;
+        const nodeId = node.id();
+        if (expandedByNode.has(String(nodeId))) {
+          const res = collapseNodeExpansion(nodeId);
+          msg(`Collapsed ${nodeId}: removed ${res.removed_nodes} node(s), ${res.removed_edges} edge(s).`);
+          return;
+        }
+        const hidden = hiddenNeighborCount(node);
+        const hasExpandableHidden = hidden > 0 && Number(node.data("degree_total") || 0) > EXPAND_HINT_THRESHOLD;
+        if (!hasExpandableHidden) return;
+        try {
+          const result = await expandNodeNeighbors(nodeId);
+          const returned = Number((result && result.returned_neighbor_count) || 0);
+          const remaining = Number((result && result.remaining_neighbor_count) || 0);
+          msg(`Expanded ${returned} node(s) from ${nodeId}${remaining > 0 ? `, ${remaining} still hidden` : ""}.`);
+        } catch (e) {
+          msg(`Expansion failed: ${e.message}`, true);
+        }
+      }
+      function collapseNodeExpansion(nodeId) {
+        if (!cy) return { removed_nodes: 0, removed_edges: 0 };
+        const key = String(nodeId || "");
+        const snapshot = expandedByNode.get(key);
+        if (!snapshot) return { removed_nodes: 0, removed_edges: 0 };
+        let removedEdges = 0;
+        let removedNodes = 0;
+        for (const eid of snapshot.edges || []) {
+          removeOwner(edgeOwners, eid, key);
+          if (!initialEdgeIds.has(eid) && !edgeOwners.has(eid)) {
+            const edgeEl = cy.getElementById(eid);
+            if (edgeEl && edgeEl.length) {
+              edgeEl.remove();
+              removedEdges += 1;
+            }
+          }
+        }
+        for (const nid of snapshot.nodes || []) {
+          removeOwner(nodeOwners, nid, key);
+          if (initialNodeIds.has(nid) || nodeOwners.has(nid)) continue;
+          const nodeEl = cy.getElementById(nid);
+          if (!nodeEl || !nodeEl.length) continue;
+          if (nodeEl.connectedEdges().length === 0) {
+            nodeEl.remove();
+            removedNodes += 1;
+          }
+        }
+        expandedByNode.delete(key);
+        refreshNodeLabelsWithExpansionHints();
+        cy.layout({ name: "cose", animate: false, fit: false, padding: 20 }).run();
+        return { removed_nodes: removedNodes, removed_edges: removedEdges };
+      }
+      function initResolvedTenantLabel() {
+        const label = el("tenantResolvedLabel");
+        if (!label) return;
+        if (!DEFAULT_TENANT_ID) {
+          label.textContent = "No tenant context resolved for this user.";
+          return;
+        }
+        if (DEFAULT_TENANT_NAME) {
+          label.textContent = `Tenant context: ${DEFAULT_TENANT_NAME} (#${DEFAULT_TENANT_ID})`;
+          return;
+        }
+        label.textContent = `Tenant context: #${DEFAULT_TENANT_ID}`;
+      }
+      function clearGraph() {
+        if (cy) {
+          cy.destroy();
+          cy = null;
+        }
+        currentCustomer = null;
+        currentCustomerTransactions = [];
+        setCustomerScreenContext(null, null);
+        clearNodeDetails();
+        clearCustomerTransactions();
+        msg("Graph cleared.");
+      }
+      function setText(id, value) {
+        const target = el(id);
+        if (!target) return;
+        target.textContent = value ? String(value) : "-";
+      }
+      function clearNodeDetails(message) {
+        const hint = el("nodeDetailsHint");
+        const container = el("nodeDetailsContainer");
+        if (!hint || !container) return;
+        hint.textContent = message || "Click a non-surrogate node or an edge to view attributes. Double-click a node to expand/collapse links.";
+        container.innerHTML = "";
+      }
+      function formatDetailValue(value) {
+        if (value === null || value === undefined || value === "") return "-";
+        if (Array.isArray(value)) return value.length ? value.join(", ") : "-";
+        if (typeof value === "object") return JSON.stringify(value);
+        return String(value);
+      }
+      function renderDetailsRows(entries) {
+        return entries.map(([k, v]) => {
+          const value = formatDetailValue(v);
+          return `<div style="display:grid; grid-template-columns: 220px 1fr; gap:0.6rem; padding:0.25rem 0; border-bottom:1px solid #e5ecf2;"><div class="subtle">${k}</div><div>${value}</div></div>`;
+        }).join("");
+      }
+      function renderNodeDetails(nodeData) {
+        const hint = el("nodeDetailsHint");
+        const container = el("nodeDetailsContainer");
+        if (!hint || !container) return;
+        if (!nodeData || typeof nodeData !== "object") {
+          clearNodeDetails();
+          return;
+        }
+        const nodeType = String(nodeData.node_type || "");
+        if (SURROGATE_TYPES.has(nodeType)) {
+          clearNodeDetails("Attributes are not displayed for surrogate nodes.");
+          return;
+        }
+        const ignore = new Set(["icon_svg", "display_label", "base_label"]);
+        const entries = Object.entries(nodeData)
+          .filter(([k]) => !ignore.has(k))
+          .sort((a, b) => a[0].localeCompare(b[0]));
+        hint.textContent = `Node: ${String(nodeData.label || nodeData.id || "-")} (${nodeType || "Unknown"})`;
+        if (!entries.length) {
+          container.innerHTML = "<div class='subtle'>No attributes available for this node.</div>";
+          return;
+        }
+        container.innerHTML = renderDetailsRows(entries);
+      }
+      function renderEdgeDetails(edgeData) {
+        const hint = el("nodeDetailsHint");
+        const container = el("nodeDetailsContainer");
+        if (!hint || !container) return;
+        if (!edgeData || typeof edgeData !== "object") {
+          clearNodeDetails();
+          return;
+        }
+
+        const edgeType = String(edgeData.edge_type || "Edge");
+        const source = String(edgeData.source || "-");
+        const target = String(edgeData.target || "-");
+        hint.textContent = `Edge: ${edgeType} (${source} -> ${target})`;
+
+        const breakdownRows = Array.isArray(edgeData.activity_breakdown) ? edgeData.activity_breakdown : [];
+        const ignore = new Set(["activity_breakdown"]);
+        const entries = Object.entries(edgeData)
+          .filter(([k]) => !ignore.has(k))
+          .sort((a, b) => a[0].localeCompare(b[0]));
+
+        if (edgeType === "TXN_FLOW_AGG") {
+          const summaryRows = [
+            ["total_external_transfer_activity_amount", edgeData.total_amount],
+            ["total_external_transfer_activity_count", edgeData.txn_count],
+            ["inbound_amount", edgeData.inbound_amount],
+            ["inbound_txn_count", edgeData.inbound_txn_count],
+            ["outbound_amount", edgeData.outbound_amount],
+            ["outbound_txn_count", edgeData.outbound_txn_count],
+          ];
+          const existing = new Set(summaryRows.map(([k]) => k));
+          const remaining = entries.filter(([k]) => !existing.has(k));
+          let html = renderDetailsRows(summaryRows) + renderDetailsRows(remaining);
+          if (breakdownRows.length) {
+            html += `
+              <div style="margin-top:0.7rem; font-weight:700;">Activity Breakdown by AML Classification and Direction</div>
+              <table style="margin-top:0.35rem; width:100%; border-collapse:collapse;">
+                <thead>
+                  <tr>
+                    <th style="text-align:left; border-bottom:1px solid #d8e1e9; padding:0.35rem;">aml_classification</th>
+                    <th style="text-align:left; border-bottom:1px solid #d8e1e9; padding:0.35rem;">direction</th>
+                    <th style="text-align:right; border-bottom:1px solid #d8e1e9; padding:0.35rem;">total_amount</th>
+                    <th style="text-align:right; border-bottom:1px solid #d8e1e9; padding:0.35rem;">txn_count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${breakdownRows.map((r) => `
+                    <tr>
+                      <td style="border-bottom:1px solid #eef3f7; padding:0.35rem;">${formatDetailValue(r.aml_classification)}</td>
+                      <td style="border-bottom:1px solid #eef3f7; padding:0.35rem;">${formatDetailValue(r.direction)}</td>
+                      <td style="border-bottom:1px solid #eef3f7; padding:0.35rem; text-align:right;">${formatDetailValue(r.total_amount)}</td>
+                      <td style="border-bottom:1px solid #eef3f7; padding:0.35rem; text-align:right;">${formatDetailValue(r.txn_count)}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            `;
+          }
+          container.innerHTML = html;
+          return;
+        }
+
+        if (!entries.length) {
+          container.innerHTML = "<div class='subtle'>No attributes available for this edge.</div>";
+          return;
+        }
+        container.innerHTML = renderDetailsRows(entries);
+      }
+      function setCustomerScreenContext(customer, payload) {
+        setText("customerScreenCustomerKey", customer && customer.customer_key);
+        setText("customerScreenName", customer && customer.name);
+        setText("customerScreenBusinessUnit", customer && customer.business_unit);
+        setText("customerScreenSegment", customer && customer.customer_segment);
+        const location = customer ? [customer.address_city || "", customer.address_state_province || ""].filter(Boolean).join(", ") : "";
+        setText("customerScreenLocation", location);
+        const summary = el("customerScreenSummary");
+        if (!summary) return;
+        if (!payload) {
+          summary.textContent = "Load a customer graph to populate details.";
+          return;
+        }
+        summary.textContent = `Graph: ${payload.node_count || 0} nodes, ${payload.edge_count || 0} edges, hops=${payload.hops || 0}.`;
+      }
+      function clearCustomerTransactions(message) {
+        const hint = el("txnTableHint");
+        const tbody = el("txnRows");
+        if (hint) hint.textContent = message || "Transactions from dh_fact_cash for this customer's primary account relationships.";
+        if (tbody) tbody.innerHTML = "";
+      }
+      function getSelectedLowerSet(selectId) {
+        const sel = el(selectId);
+        if (!sel) return new Set();
+        const values = Array.from(sel.selectedOptions || [])
+          .map((o) => String(o.value || "").trim().toLowerCase())
+          .filter(Boolean);
+        return new Set(values);
+      }
+      function populateTxnSelectOptions(rows) {
+        const defs = [
+          { selectId: "txnSelectAccountKey", key: "account_key" },
+          { selectId: "txnSelectAmlClassification", key: "aml_classification" },
+          { selectId: "txnSelectDirection", key: "direction" },
+          { selectId: "txnSelectAmount", key: "amount" },
+          { selectId: "txnSelectCountryCode2", key: "country_code_2" },
+          { selectId: "txnSelectCurrencyCode", key: "currency_code" },
+          { selectId: "txnSelectCounterpartyName", key: "counterparty_name" },
+        ];
+        for (const def of defs) {
+          const sel = el(def.selectId);
+          if (!sel) continue;
+          const prevSelected = new Set(Array.from(sel.selectedOptions || []).map((o) => String(o.value || "")));
+          const uniques = Array.from(new Set((rows || []).map((r) => {
+            if (def.key === "amount") {
+              return Number(r.amount || 0).toFixed(2);
+            }
+            return String(r?.[def.key] || "");
+          }).filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+          sel.innerHTML = "";
+          for (const v of uniques) {
+            const opt = document.createElement("option");
+            opt.value = String(v);
+            opt.textContent = String(v);
+            if (prevSelected.has(String(v))) opt.selected = true;
+            sel.appendChild(opt);
+          }
+        }
+      }
+      function parseAmountFilter(rawValue) {
+        const raw = String(rawValue || "").trim();
+        if (!raw) return null;
+        if (raw.includes("-")) {
+          const [a, b] = raw.split("-", 2).map((v) => Number(String(v || "").trim()));
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+          return { min: Math.min(a, b), max: Math.max(a, b) };
+        }
+        const v = Number(raw);
+        if (!Number.isFinite(v)) return null;
+        return { min: v, max: null };
+      }
+      function applyCustomerTransactionFilters() {
+        const rows = Array.isArray(currentCustomerTransactions) ? currentCustomerTransactions : [];
+        const fDateStart = String(el("txnFilterTransactionDateStart")?.value || "").trim();
+        const fDateEnd = String(el("txnFilterTransactionDateEnd")?.value || "").trim();
+        const fAccount = String(el("txnFilterAccountKey")?.value || "").trim().toLowerCase();
+        const fAml = String(el("txnFilterAmlClassification")?.value || "").trim().toLowerCase();
+        const fDirection = String(el("txnFilterDirection")?.value || "").trim().toLowerCase();
+        const fCountry = String(el("txnFilterCountryCode2")?.value || "").trim().toLowerCase();
+        const fCurrency = String(el("txnFilterCurrencyCode")?.value || "").trim().toLowerCase();
+        const fCounterparty = String(el("txnFilterCounterpartyName")?.value || "").trim().toLowerCase();
+        const sAccount = getSelectedLowerSet("txnSelectAccountKey");
+        const sAml = getSelectedLowerSet("txnSelectAmlClassification");
+        const sDirection = getSelectedLowerSet("txnSelectDirection");
+        const sAmount = getSelectedLowerSet("txnSelectAmount");
+        const sCountry = getSelectedLowerSet("txnSelectCountryCode2");
+        const sCurrency = getSelectedLowerSet("txnSelectCurrencyCode");
+        const sCounterparty = getSelectedLowerSet("txnSelectCounterpartyName");
+        const amountRange = parseAmountFilter(String(el("txnFilterAmount")?.value || ""));
+        const filtered = rows.filter((row) => {
+          const amount = Number(row.amount || 0);
+          const transactionDate = String(row.transaction_date || "");
+          const accountKey = String(row.account_key || "").toLowerCase();
+          const amlClassification = String(row.aml_classification || "").toLowerCase();
+          const direction = String(row.direction || "").toLowerCase();
+          const amountText = Number(amount || 0).toFixed(2).toLowerCase();
+          const countryCode2 = String(row.country_code_2 || "").toLowerCase();
+          const currencyCode = String(row.currency_code || "").toLowerCase();
+          const counterpartyName = String(row.counterparty_name || "").toLowerCase();
+          if (fDateStart && transactionDate && transactionDate < fDateStart) return false;
+          if (fDateEnd && transactionDate && transactionDate > fDateEnd) return false;
+          if ((fDateStart || fDateEnd) && !transactionDate) return false;
+          if (fAccount && !accountKey.includes(fAccount)) return false;
+          if (fAml && !amlClassification.includes(fAml)) return false;
+          if (fDirection && !direction.includes(fDirection)) return false;
+          if (fCountry && !countryCode2.includes(fCountry)) return false;
+          if (fCurrency && !currencyCode.includes(fCurrency)) return false;
+          if (fCounterparty && !counterpartyName.includes(fCounterparty)) return false;
+          if (sAccount.size && !sAccount.has(accountKey)) return false;
+          if (sAml.size && !sAml.has(amlClassification)) return false;
+          if (sDirection.size && !sDirection.has(direction)) return false;
+          if (sAmount.size && !sAmount.has(amountText)) return false;
+          if (sCountry.size && !sCountry.has(countryCode2)) return false;
+          if (sCurrency.size && !sCurrency.has(currencyCode)) return false;
+          if (sCounterparty.size && !sCounterparty.has(counterpartyName)) return false;
+          if (amountRange) {
+            if (amount < amountRange.min) return false;
+            if (amountRange.max !== null && amount > amountRange.max) return false;
+          }
+          return true;
+        });
+        renderCustomerTransactionsTable(filtered, rows.length);
+      }
+      function clearCustomerTransactionFilters() {
+        [
+          "txnFilterTransactionDateStart",
+          "txnFilterTransactionDateEnd",
+          "txnFilterAccountKey",
+          "txnFilterAmlClassification",
+          "txnFilterDirection",
+          "txnFilterAmount",
+          "txnFilterCountryCode2",
+          "txnFilterCurrencyCode",
+          "txnFilterCounterpartyName",
+        ].forEach((id) => {
+          const input = el(id);
+          if (!input) return;
+          input.value = "";
+        });
+        [
+          "txnSelectAccountKey",
+          "txnSelectAmlClassification",
+          "txnSelectDirection",
+          "txnSelectAmount",
+          "txnSelectCountryCode2",
+          "txnSelectCurrencyCode",
+          "txnSelectCounterpartyName",
+        ].forEach((id) => {
+          const sel = el(id);
+          if (!sel) return;
+          Array.from(sel.options || []).forEach((opt) => {
+            opt.selected = false;
+          });
+        });
+        applyCustomerTransactionFilters();
+      }
+      function renderCustomerTransactionsTable(rows, totalCount) {
+        const tbody = el("txnRows");
+        const hint = el("txnTableHint");
+        if (!tbody || !hint) return;
+        tbody.innerHTML = "";
+        const sortedRows = [...(rows || [])].sort((a, b) => {
+          const dA = String(a?.transaction_date || "");
+          const dB = String(b?.transaction_date || "");
+          if (dA !== dB) return dB.localeCompare(dA);
+          const tA = String(a?.transaction_ts || "");
+          const tB = String(b?.transaction_ts || "");
+          if (tA !== tB) return tB.localeCompare(tA);
+          return String(b?.transaction_key || "").localeCompare(String(a?.transaction_key || ""));
+        });
+        for (const row of sortedRows) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${row.transaction_date || "-"}</td>
+            <td>${row.account_key || "-"}</td>
+            <td>${row.aml_classification || "-"}</td>
+            <td>${row.direction || "-"}</td>
+            <td style="text-align:right;">${Number(row.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>${row.country_code_2 || "-"}</td>
+            <td>${row.currency_code || "-"}</td>
+            <td>${row.counterparty_name || "-"}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+        hint.textContent = `Showing ${(rows || []).length} of ${Number(totalCount || 0)} transaction(s) for primary customer-account relationships.`;
+      }
+      async function loadCustomerTransactions(customerKey) {
+        const tenantId = selectedTenantId();
+        if (!tenantId || !customerKey) return;
+        clearCustomerTransactions("Loading customer transactions...");
+        const params = new URLSearchParams();
+        params.set("tenant_id", String(tenantId));
+        params.set("customer_key", String(customerKey));
+        params.set("limit", "5000");
+        const payload = await call("/api/entity-search/customer-transactions?" + params.toString());
+        currentCustomerTransactions = Array.isArray(payload?.rows) ? payload.rows : [];
+        populateTxnSelectOptions(currentCustomerTransactions);
+        applyCustomerTransactionFilters();
+      }
+      function zoomGraphIn() {
+        if (!cy) return;
+        const currentZoom = cy.zoom();
+        cy.zoom({
+          level: currentZoom * 1.2,
+          renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 }
+        });
+      }
+      function zoomGraphOut() {
+        if (!cy) return;
+        const currentZoom = cy.zoom();
+        cy.zoom({
+          level: currentZoom / 1.2,
+          renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 }
+        });
+      }
+      function resetGraphView() {
+        if (!cy) return;
+        cy.fit(undefined, 20);
+        cy.center();
+      }
+      function renderGraph(payload) {
+        const collapsed = collapseInitialGraph(payload, EXPAND_HINT_THRESHOLD);
+        const graphDiv = el("graph");
+        const nodes = ((collapsed.elements || {}).nodes || []).map((n) => {
+          const data = n.data || {};
+          const nodeType = String(data.node_type || "Node");
+          const baseLabel = String(data.label || data.id || "");
+          return {
+            data: {
+              ...data,
+              base_label: baseLabel,
+              display_label: baseLabel,
+              icon_svg: iconForNodeType(nodeType)
+            }
+          };
+        });
+        const edges = ((collapsed.elements || {}).edges || []).map((e) => ({ data: e.data }));
+        if (cy) cy.destroy();
+        if (!window.cytoscape) {
+          graphDiv.innerHTML = "<p class='subtle'>Cytoscape.js not available. JSON shown below.</p>";
+          return;
+        }
+        initialNodeIds = new Set(nodes.map((n) => String((n.data || {}).id || "")).filter(Boolean));
+        initialEdgeIds = new Set(edges.map((e) => String((e.data || {}).id || "")).filter(Boolean));
+        nodeOwners.clear();
+        edgeOwners.clear();
+        expandedByNode.clear();
+        cy = cytoscape({
+          container: graphDiv,
+          elements: { nodes, edges },
+          style: [
+            { selector: "node", style: { "label": "data(display_label)", "font-size": 8, "text-wrap": "wrap", "text-max-width": 120, "background-color": "#1f5f8b", "color": "#1f2933", "width": 24, "height": 24, "background-image": "data(icon_svg)", "background-fit": "cover", "background-clip": "none", "background-opacity": 1 } },
+            { selector: "edge", style: { "curve-style": "bezier", "target-arrow-shape": "triangle", "arrow-scale": 0.7, "line-color": "#7f99ad", "target-arrow-color": "#7f99ad", "width": 1.2, "label": "" } },
+            { selector: "node[node_type = 'Customer']", style: { "background-color": "#2d7e46" } },
+            { selector: "node[node_type = 'AssociatedParty']", style: { "background-color": "#7a4f1d" } },
+            { selector: "node[node_type = 'Account']", style: { "background-color": "#155fa0" } },
+            { selector: "node[node_type = 'CounterpartyAccount']", style: { "background-color": "#8b5f1f" } },
+            { selector: "node[node_type = 'OfacSdn']", style: { "background-color": "#9b1c1c" } },
+            { selector: "node[node_type = 'SurrogateName'], node[node_type = 'SurrogateAddress'], node[node_type = 'SurrogateNameAddress']", style: { "background-color": "#6b7280", "shape": "diamond", "width": 16, "height": 16 } }
+          ],
+          layout: { name: "cose", animate: false, fit: true, padding: 20 }
+        });
+        refreshNodeLabelsWithExpansionHints();
+        cy.on("tap", "node", async (evt) => {
+          const node = evt.target;
+          const clickCount = Number(evt?.originalEvent?.detail || 1);
+
+          if (singleTapTimer) {
+            clearTimeout(singleTapTimer);
+            singleTapTimer = null;
+          }
+
+          if (clickCount < 2) {
+            singleTapTimer = setTimeout(() => {
+              renderNodeDetails(node.data());
+              singleTapTimer = null;
+            }, DOUBLE_TAP_MS + 10);
+            return;
+          }
+
+          await toggleNodeExpansion(node);
+        });
+        cy.on("dbltap", "node", async (evt) => {
+          if (singleTapTimer) {
+            clearTimeout(singleTapTimer);
+            singleTapTimer = null;
+          }
+          await toggleNodeExpansion(evt.target);
+        });
+        cy.on("tap", "edge", (evt) => {
+          if (singleTapTimer) {
+            clearTimeout(singleTapTimer);
+            singleTapTimer = null;
+          }
+          renderEdgeDetails(evt.target.data());
+        });
+      }
+      async function runSearch() {
+        const q = String(el("searchText").value || "").trim();
+        const tenantId = selectedTenantId();
+        if (!tenantId) { msg("Select a tenant.", true); return; }
+        if (!q) { msg("Enter a customer name to search.", true); return; }
+        try {
+          const params = new URLSearchParams();
+          params.set("tenant_id", String(tenantId));
+          params.set("q", q);
+          params.set("limit", String(Number(el("resultLimit").value || 20)));
+          const bu = String(el("businessUnit").value || "").trim();
+          const seg = String(el("customerSegment").value || "").trim();
+          if (bu) params.set("business_unit", bu);
+          if (seg) params.set("customer_segment", seg);
+          const data = await call("/api/entity-search/customer-seed-search?" + params.toString());
+          renderSearchResults((data && data.results) ? data.results : []);
+          msg(`Found ${(data && data.result_count) || 0} matching customer(s).`);
+        } catch (e) {
+          msg(`Search failed: ${e.message}`, true);
+        }
+      }
+      function renderSearchResults(rows) {
+        const tbody = el("resultsRows");
+        tbody.innerHTML = "";
+        for (const row of (rows || [])) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${row.customer_key || ""}</td>
+            <td>${row.name || ""}</td>
+            <td>${row.business_unit || ""}</td>
+            <td>${row.customer_segment || ""}</td>
+            <td>${[row.address_city || "", row.address_state_province || ""].filter(Boolean).join(", ")}</td>
+            <td>${row.score || 0}</td>
+            <td></td>
+          `;
+          const btn = document.createElement("button");
+          btn.textContent = "Load Customer";
+          btn.onclick = () => loadCustomerGraph(row);
+          tr.children[6].appendChild(btn);
+          tbody.appendChild(tr);
+        }
+      }
+      async function loadCustomerGraph(customerInput) {
+        const customer = (customerInput && typeof customerInput === "object")
+          ? customerInput
+          : { customer_key: String(customerInput || "") };
+        const customerKey = String(customer.customer_key || "");
+        const tenantId = selectedTenantId();
+        if (!tenantId) { msg("Select a tenant.", true); return; }
+        if (!customerKey) { msg("Customer key is required.", true); return; }
+        try {
+          const params = new URLSearchParams();
+          params.set("tenant_id", String(tenantId));
+          params.set("customer_key", customerKey);
+          params.set("hops", String(Number(el("hops").value || 2)));
+          params.set("max_nodes", String(Number(el("maxNodes").value || 500)));
+          params.set("max_edges", String(Number(el("maxEdges").value || 2000)));
+          const payload = await call("/api/entity-search/customer-graph?" + params.toString());
+          renderGraph(payload);
+          currentCustomer = customer;
+          setCustomerScreenContext(currentCustomer, payload);
+          await loadCustomerTransactions(customerKey);
+          msg(`Graph loaded for ${customerKey}: ${payload.node_count || 0} nodes, ${payload.edge_count || 0} edges. Nodes with +N can be expanded.`);
+        } catch (e) {
+          msg(`Graph load failed: ${e.message}`, true);
+        }
+      }
+
+      initResolvedTenantLabel();
+      setCustomerScreenContext(null, null);
+      clearNodeDetails();
+      clearCustomerTransactions();
+      [
+        "txnFilterTransactionDateStart",
+        "txnFilterTransactionDateEnd",
+        "txnFilterAccountKey",
+        "txnFilterAmlClassification",
+        "txnFilterDirection",
+        "txnFilterAmount",
+        "txnFilterCountryCode2",
+        "txnFilterCurrencyCode",
+        "txnFilterCounterpartyName",
+        "txnSelectAccountKey",
+        "txnSelectAmlClassification",
+        "txnSelectDirection",
+        "txnSelectAmount",
+        "txnSelectCountryCode2",
+        "txnSelectCurrencyCode",
+        "txnSelectCounterpartyName",
+      ].forEach((id) => {
+        const input = el(id);
+        if (!input) return;
+        input.addEventListener("input", () => applyCustomerTransactionFilters());
+        input.addEventListener("change", () => applyCustomerTransactionFilters());
+      });
+    </script>
+  </body>
+</html>
