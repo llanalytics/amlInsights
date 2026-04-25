@@ -1,0 +1,477 @@
+{
+  "library_version": "2026-04-24.v1",
+  "default_intent": "general_exposure",
+  "intents": [
+    {
+      "intent": "negative_news_exposure",
+      "description": "Identify potential negative-news exposure, including Panama Papers nexus signals.",
+      "priority": 125,
+      "patterns": [
+        "negative news",
+        "adverse media",
+        "panama papers",
+        "media exposure",
+        "reputation risk"
+      ],
+      "synonyms": [
+        "offshore leaks",
+        "panama nexus",
+        "public allegations"
+      ],
+      "top_seed_count": 4,
+      "assumptions": [
+        "Panama Papers relationship links are treated as potential negative-news nexus indicators.",
+        "Negative-news evidence in this mode is currently proxy-based from graph and Panama reference relationships."
+      ],
+      "limitations": [
+        "This mode does not yet include external news article retrieval; it uses internal graph-linked proxies.",
+        "Panama nexus indicates investigative relevance, not a final adverse determination."
+      ],
+      "query_plan_template": {
+        "steps": [
+          {
+            "step": 1,
+            "name": "seed_search",
+            "query_type": "lexical_entity_seed_search",
+            "endpoint": "/api/graph/exposure-seed-search",
+            "params": {
+              "q": "{question}",
+              "limit": "{seed_limit}"
+            }
+          },
+          {
+            "step": 2,
+            "name": "graph_expansion",
+            "query_type": "relationship_subgraph_retrieval",
+            "endpoint": "/api/graph/exposure",
+            "params": {
+              "hops": "{hops}",
+              "max_nodes": "{max_nodes}",
+              "max_edges": "{max_edges}",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}"
+            },
+            "notes": "Executed for top matched seeds only."
+          },
+          {
+            "step": 3,
+            "name": "transaction_details",
+            "query_type": "cash_fact_transaction_retrieval",
+            "endpoint": "/api/graph/exposure/transactions",
+            "params": {
+              "hops": "{hops}",
+              "limit": "200",
+              "outside_country_code_2": "US",
+              "direction": "outbound",
+              "aml_classification_contains": "",
+              "mechanism_contains": "wire"
+            },
+            "notes": "Run for top seeds to gather detail rows from dh_fact_cash."
+          },
+          {
+            "step": 4,
+            "name": "grounded_summary",
+            "query_type": "evidence_constrained_synthesis",
+            "notes": "Summary must reference retrieved evidence only."
+          }
+        ]
+      }
+    },
+    {
+      "intent": "sanctions_exposure",
+      "description": "Identify sanctions-linked entities and relationship paths.",
+      "priority": 120,
+      "patterns": [
+        "ofac",
+        "sanction",
+        "sdn",
+        "watchlist",
+        "embargo"
+      ],
+      "synonyms": [
+        "blocked person",
+        "sanctions list",
+        "special designated national"
+      ],
+      "top_seed_count": 4,
+      "assumptions": [
+        "Sanctions relevance is inferred from Data Hub OFAC node/link presence in the returned subgraph.",
+        "The OFAC sample/reference dataset loaded into Data Hub is assumed current for this environment."
+      ],
+      "limitations": [
+        "This analysis does not perform external sanctions screening beyond configured Data Hub content.",
+        "Potential match edges are investigative leads, not final legal or regulatory determinations."
+      ],
+      "query_plan_template": {
+        "steps": [
+          {
+            "step": 1,
+            "name": "seed_search",
+            "query_type": "lexical_entity_seed_search",
+            "endpoint": "/api/graph/exposure-seed-search",
+            "params": {
+              "q": "{question}",
+              "limit": "{seed_limit}"
+            }
+          },
+          {
+            "step": 2,
+            "name": "graph_expansion",
+            "query_type": "relationship_subgraph_retrieval",
+            "endpoint": "/api/graph/exposure",
+            "params": {
+              "hops": "{hops}",
+              "max_nodes": "{max_nodes}",
+              "max_edges": "{max_edges}",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}"
+            },
+            "notes": "Executed for top matched seeds only."
+          },
+          {
+            "step": 3,
+            "name": "grounded_summary",
+            "query_type": "evidence_constrained_synthesis",
+            "notes": "Summary must reference retrieved evidence only."
+          }
+        ]
+      }
+    },
+    {
+      "intent": "offshore_exposure",
+      "description": "Identify offshore or Panama Papers nexus as potential negative-news exposure indicators.",
+      "priority": 110,
+      "patterns": [
+        "panama",
+        "offshore",
+        "shell company",
+        "beneficial owner",
+        "nominee"
+      ],
+      "synonyms": [
+        "offshore leaks",
+        "tax haven",
+        "opaque ownership",
+        "negative news",
+        "adverse media",
+        "panama papers nexus"
+      ],
+      "top_seed_count": 4,
+      "assumptions": [
+        "Offshore exposure is inferred from Panama node and relationship evidence in the returned graph.",
+        "Entity names and notes fields in reference datasets are assumed consistently populated."
+      ],
+      "limitations": [
+        "Absence of Panama relationship evidence does not prove absence of offshore risk.",
+        "This run is bounded by configured graph size controls and may omit distant connections."
+      ],
+      "query_plan_template": {
+        "steps": [
+          {
+            "step": 1,
+            "name": "seed_search",
+            "query_type": "lexical_entity_seed_search",
+            "endpoint": "/api/graph/exposure-seed-search",
+            "params": {
+              "q": "{question}",
+              "limit": "{seed_limit}"
+            }
+          },
+          {
+            "step": 2,
+            "name": "graph_expansion",
+            "query_type": "relationship_subgraph_retrieval",
+            "endpoint": "/api/graph/exposure",
+            "params": {
+              "hops": "{hops}",
+              "max_nodes": "{max_nodes}",
+              "max_edges": "{max_edges}",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}"
+            },
+            "notes": "Executed for top matched seeds only."
+          },
+          {
+            "step": 3,
+            "name": "grounded_summary",
+            "query_type": "evidence_constrained_synthesis",
+            "notes": "Summary must reference retrieved evidence only."
+          }
+        ]
+      }
+    },
+    {
+      "intent": "transaction_exposure",
+      "description": "Identify transaction-flow exposure around relevant entities.",
+      "priority": 100,
+      "patterns": [
+        "transaction",
+        "flow",
+        "payment",
+        "wire",
+        "cash",
+        "movement"
+      ],
+      "synonyms": [
+        "fund flow",
+        "cash activity",
+        "payment corridor"
+      ],
+      "top_seed_count": 3,
+      "assumptions": [
+        "Transaction exposure is represented by TXN_FLOW edges in returned graph results.",
+        "Amounts and counts attached to flow edges are assumed accurate for the loaded snapshot."
+      ],
+      "limitations": [
+        "This analysis does not compute customer behavior baselines or anomaly scores.",
+        "Only transaction paths present in the current graph snapshot are considered."
+      ],
+      "query_plan_template": {
+        "steps": [
+          {
+            "step": 1,
+            "name": "seed_search",
+            "query_type": "lexical_entity_seed_search",
+            "endpoint": "/api/graph/exposure-seed-search",
+            "params": {
+              "q": "{question}",
+              "limit": "{seed_limit}"
+            }
+          },
+          {
+            "step": 2,
+            "name": "graph_expansion",
+            "query_type": "relationship_subgraph_retrieval",
+            "endpoint": "/api/graph/exposure",
+            "params": {
+              "hops": "{hops}",
+              "max_nodes": "{max_nodes}",
+              "max_edges": "{max_edges}",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}"
+            },
+            "notes": "Executed for top matched seeds only."
+          },
+          {
+            "step": 3,
+            "name": "transaction_details",
+            "query_type": "cash_fact_transaction_retrieval",
+            "endpoint": "/api/graph/exposure/transactions",
+            "params": {
+              "hops": "{hops}",
+              "limit": "200",
+              "outside_country_code_2": "US",
+              "direction": "outbound",
+              "aml_classification_contains": "",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}",
+              "mechanism_contains": "wire"
+            },
+            "notes": "Run for top seeds to gather wire/outside-US detail rows from dh_fact_cash."
+          },
+          {
+            "step": 4,
+            "name": "grounded_summary",
+            "query_type": "evidence_constrained_synthesis",
+            "notes": "Summary must reference retrieved evidence only."
+          }
+        ]
+      }
+    },
+    {
+      "intent": "counterparty_exposure",
+      "description": "Identify counterparty-linked exposure relationships.",
+      "priority": 95,
+      "patterns": [
+        "counterparty",
+        "counter party",
+        "beneficiary",
+        "originator"
+      ],
+      "synonyms": [
+        "counterparty account",
+        "third party"
+      ],
+      "top_seed_count": 3,
+      "assumptions": [
+        "Counterparty exposure is inferred from graph relationships around matched counterparties.",
+        "Counterparty labels and keys are assumed normalized in source data."
+      ],
+      "limitations": [
+        "Returned links indicate relationship proximity, not direct proof of suspicious conduct.",
+        "Evidence quality depends on completeness of loaded bridge/fact records."
+      ],
+      "query_plan_template": {
+        "steps": [
+          {
+            "step": 1,
+            "name": "seed_search",
+            "query_type": "lexical_entity_seed_search",
+            "endpoint": "/api/graph/exposure-seed-search",
+            "params": {
+              "q": "{question}",
+              "limit": "{seed_limit}"
+            }
+          },
+          {
+            "step": 2,
+            "name": "graph_expansion",
+            "query_type": "relationship_subgraph_retrieval",
+            "endpoint": "/api/graph/exposure",
+            "params": {
+              "hops": "{hops}",
+              "max_nodes": "{max_nodes}",
+              "max_edges": "{max_edges}",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}"
+            },
+            "notes": "Executed for top matched seeds only."
+          },
+          {
+            "step": 3,
+            "name": "grounded_summary",
+            "query_type": "evidence_constrained_synthesis",
+            "notes": "Summary must reference retrieved evidence only."
+          }
+        ]
+      }
+    },
+    {
+      "intent": "high_risk_geography_exposure",
+      "description": "Identify exposure linked to high-risk geography patterns.",
+      "priority": 90,
+      "patterns": [
+        "high risk geography",
+        "geography",
+        "country",
+        "cross border",
+        "jurisdiction"
+      ],
+      "synonyms": [
+        "corridor",
+        "foreign jurisdiction",
+        "cross-border"
+      ],
+      "top_seed_count": 3,
+      "assumptions": [
+        "Geographic risk context is inferred indirectly through entities and graph relationships in scope.",
+        "Country/currency and related dimensions are assumed loaded and current."
+      ],
+      "limitations": [
+        "No external country-risk scoring model is applied in this flow.",
+        "This output should be paired with policy/risk-rating controls before final decisions."
+      ],
+      "query_plan_template": {
+        "steps": [
+          {
+            "step": 1,
+            "name": "seed_search",
+            "query_type": "lexical_entity_seed_search",
+            "endpoint": "/api/graph/exposure-seed-search",
+            "params": {
+              "q": "{question}",
+              "limit": "{seed_limit}"
+            }
+          },
+          {
+            "step": 2,
+            "name": "graph_expansion",
+            "query_type": "relationship_subgraph_retrieval",
+            "endpoint": "/api/graph/exposure",
+            "params": {
+              "hops": "{hops}",
+              "max_nodes": "{max_nodes}",
+              "max_edges": "{max_edges}",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}"
+            },
+            "notes": "Executed for top matched seeds only."
+          },
+          {
+            "step": 3,
+            "name": "transaction_details",
+            "query_type": "cash_fact_transaction_retrieval",
+            "endpoint": "/api/graph/exposure/transactions",
+            "params": {
+              "hops": "{hops}",
+              "limit": "200",
+              "outside_country_code_2": "US",
+              "direction": "outbound",
+              "aml_classification_contains": "",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}",
+              "mechanism_contains": "wire"
+            },
+            "notes": "Run for top seeds to gather wire/outside-US detail rows from dh_fact_cash."
+          },
+          {
+            "step": 4,
+            "name": "grounded_summary",
+            "query_type": "evidence_constrained_synthesis",
+            "notes": "Summary must reference retrieved evidence only."
+          }
+        ]
+      }
+    },
+    {
+      "intent": "general_exposure",
+      "description": "Identify exposure-relevant entities and relationship paths.",
+      "priority": 10,
+      "patterns": [],
+      "synonyms": [],
+      "top_seed_count": 3,
+      "assumptions": [
+        "Results are constrained to the tenant's configured Data Hub connection and active snapshot content.",
+        "Seed matching is lexical and may miss semantically related names not present in matched fields.",
+        "Graph scope is limited by hops/max_nodes/max_edges controls."
+      ],
+      "limitations": [
+        "No external data sources are queried beyond configured Data Hub APIs.",
+        "Absence of a relationship in this response is not evidence of true absence in all systems."
+      ],
+      "query_plan_template": {
+        "steps": [
+          {
+            "step": 1,
+            "name": "seed_search",
+            "query_type": "lexical_entity_seed_search",
+            "endpoint": "/api/graph/exposure-seed-search",
+            "params": {
+              "q": "{question}",
+              "limit": "{seed_limit}"
+            }
+          },
+          {
+            "step": 2,
+            "name": "graph_expansion",
+            "query_type": "relationship_subgraph_retrieval",
+            "endpoint": "/api/graph/exposure",
+            "params": {
+              "hops": "{hops}",
+              "max_nodes": "{max_nodes}",
+              "max_edges": "{max_edges}",
+              "include_surrogates": "{include_surrogates}",
+              "include_ofac_matches": "{include_ofac_matches}",
+              "include_txn_flow": "{include_txn_flow}"
+            },
+            "notes": "Executed for top matched seeds only."
+          },
+          {
+            "step": 3,
+            "name": "grounded_summary",
+            "query_type": "evidence_constrained_synthesis",
+            "notes": "Summary must reference retrieved evidence only."
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -5,6 +5,8 @@ import hashlib
 import re
 import csv
 import io
+from copy import deepcopy
+from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -143,6 +145,40 @@ OPENAI_CATALOG_ASSISTANT_ENABLED = os.environ.get("OPENAI_CATALOG_ASSISTANT_ENAB
 OPENAI_CATALOG_ASSISTANT_TIMEOUT_SECONDS = int(
     os.environ.get("OPENAI_CATALOG_ASSISTANT_TIMEOUT_SECONDS", "20").strip() or "20"
 )
+OPENAI_EXPOSURE_ASSISTANT_ENABLED = os.environ.get("OPENAI_EXPOSURE_ASSISTANT_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+OPENAI_EXPOSURE_ASSISTANT_TIMEOUT_SECONDS = int(
+    os.environ.get("OPENAI_EXPOSURE_ASSISTANT_TIMEOUT_SECONDS", "20").strip() or "20"
+)
+OPENAI_EXPOSURE_INTENT_ROUTER_ENABLED = os.environ.get("OPENAI_EXPOSURE_INTENT_ROUTER_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+OPENAI_EXPOSURE_INTENT_ROUTER_TIMEOUT_SECONDS = int(
+    os.environ.get("OPENAI_EXPOSURE_INTENT_ROUTER_TIMEOUT_SECONDS", "15").strip() or "15"
+)
+EXPOSURE_INTENT_ROUTE_CONFIDENCE_THRESHOLD = float(
+    os.environ.get("EXPOSURE_INTENT_ROUTE_CONFIDENCE_THRESHOLD", "0.55").strip() or "0.55"
+)
+OPENAI_EXPOSURE_FILTER_MAPPER_ENABLED = os.environ.get("OPENAI_EXPOSURE_FILTER_MAPPER_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+OPENAI_EXPOSURE_FILTER_MAPPER_TIMEOUT_SECONDS = int(
+    os.environ.get("OPENAI_EXPOSURE_FILTER_MAPPER_TIMEOUT_SECONDS", "12").strip() or "12"
+)
+EXPOSURE_FILTER_MAPPER_CONFIDENCE_THRESHOLD = float(
+    os.environ.get("EXPOSURE_FILTER_MAPPER_CONFIDENCE_THRESHOLD", "0.6").strip() or "0.6"
+)
+EXPOSURE_INTENTS_CONFIG_PATH = os.environ.get("EXPOSURE_INTENTS_CONFIG_PATH", "config/exposure_intents.json").strip()
 
 
 class AdminRedFlagCreateRequest(BaseModel):
@@ -182,6 +218,19 @@ class RedFlagSynonymUpdateRequest(BaseModel):
 class CatalogAssistantChatRequest(BaseModel):
     business_unit_id: int = Field(ge=1)
     message: str = Field(min_length=1, max_length=4000)
+
+
+class ExposureQuestionRequest(BaseModel):
+    tenant_id: int = Field(ge=1)
+    question: str = Field(min_length=1, max_length=4000)
+    seed_limit: int = Field(default=8, ge=1, le=25)
+    hops: int = Field(default=2, ge=1, le=5)
+    max_nodes: int = Field(default=500, ge=10, le=2000)
+    max_edges: int = Field(default=2000, ge=10, le=5000)
+    include_surrogates: bool = True
+    include_ofac_matches: bool = True
+    include_txn_flow: bool = True
+    include_graph: bool = True
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
@@ -468,6 +517,890 @@ def _openai_catalog_assistant_reply(
         return assistant_message, recommended_ids
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError):
         return None, []
+
+
+def _openai_exposure_assistant_enabled() -> bool:
+    return bool(OPENAI_EXPOSURE_ASSISTANT_ENABLED and OPENAI_API_KEY and OPENAI_MODEL)
+
+
+def _exposure_question_terms(question: str) -> list[str]:
+    raw_tokens = re.findall(r"[a-z0-9]{2,}", (question or "").lower())
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in raw_tokens:
+        if token in _CATALOG_ASSISTANT_STOP_WORDS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out[:16]
+
+
+def _load_exposure_intents_library() -> dict[str, object]:
+    path = Path(EXPOSURE_INTENTS_CONFIG_PATH)
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parent / path
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load exposure intents config at {path}: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"Exposure intents config must be a JSON object: {path}")
+    intents_raw = raw.get("intents")
+    if not isinstance(intents_raw, list) or not intents_raw:
+        raise RuntimeError(f"Exposure intents config requires a non-empty 'intents' list: {path}")
+
+    intents: list[dict[str, object]] = []
+    seen_codes: set[str] = set()
+    for idx, row in enumerate(intents_raw, start=1):
+        if not isinstance(row, dict):
+            raise RuntimeError(f"Intent entry #{idx} must be an object: {path}")
+        code = str(row.get("intent") or "").strip()
+        description = str(row.get("description") or "").strip()
+        query_plan_template = row.get("query_plan_template")
+        if not code:
+            raise RuntimeError(f"Intent entry #{idx} missing 'intent': {path}")
+        if code in seen_codes:
+            raise RuntimeError(f"Intent entry duplicate code '{code}': {path}")
+        if not description:
+            raise RuntimeError(f"Intent '{code}' missing 'description': {path}")
+        if not isinstance(query_plan_template, dict):
+            raise RuntimeError(f"Intent '{code}' missing object 'query_plan_template': {path}")
+        seen_codes.add(code)
+        intents.append(
+            {
+                "intent": code,
+                "description": description,
+                "priority": int(row.get("priority") or 0),
+                "patterns": [str(v).strip().lower() for v in (row.get("patterns") or []) if str(v).strip()],
+                "synonyms": [str(v).strip().lower() for v in (row.get("synonyms") or []) if str(v).strip()],
+                "query_plan_template": query_plan_template,
+                "assumptions": [str(v).strip() for v in (row.get("assumptions") or []) if str(v).strip()],
+                "limitations": [str(v).strip() for v in (row.get("limitations") or []) if str(v).strip()],
+                "top_seed_count": int(row.get("top_seed_count") or 3),
+            }
+        )
+
+    default_intent = str(raw.get("default_intent") or "").strip()
+    if not default_intent:
+        raise RuntimeError(f"Exposure intents config missing 'default_intent': {path}")
+    if default_intent not in seen_codes:
+        raise RuntimeError(f"default_intent '{default_intent}' not found in intents list: {path}")
+
+    return {
+        "library_version": str(raw.get("library_version") or "unversioned"),
+        "default_intent": default_intent,
+        "intents": intents,
+    }
+
+
+_EXPOSURE_INTENTS_LIBRARY = _load_exposure_intents_library()
+
+
+def _find_exposure_intent_definition(intent_code: str) -> dict[str, object]:
+    for intent_row in _EXPOSURE_INTENTS_LIBRARY.get("intents", []):
+        if isinstance(intent_row, dict) and str(intent_row.get("intent") or "") == intent_code:
+            return intent_row
+    raise KeyError(f"Intent definition not found: {intent_code}")
+
+
+def _render_template_placeholders(value: object, context: dict[str, object]) -> object:
+    if isinstance(value, str):
+        rendered = value
+        for key, ctx_val in context.items():
+            rendered = rendered.replace("{" + key + "}", str(ctx_val))
+        return rendered
+    if isinstance(value, list):
+        return [_render_template_placeholders(v, context) for v in value]
+    if isinstance(value, dict):
+        out: dict[str, object] = {}
+        for k, v in value.items():
+            out[str(k)] = _render_template_placeholders(v, context)
+        return out
+    return value
+
+
+def _intent_score(question_norm: str, question_terms: list[str], intent_row: dict[str, object]) -> int:
+    score = 0
+    patterns = [str(v) for v in (intent_row.get("patterns") or [])]
+    synonyms = [str(v) for v in (intent_row.get("synonyms") or [])]
+    for token in patterns:
+        if token and token in question_norm:
+            score += 140
+    for token in synonyms:
+        if token and token in question_norm:
+            score += 70
+    question_set = set(question_terms)
+    synonyms_set = {str(v) for v in synonyms if str(v)}
+    overlap = len(question_set.intersection(synonyms_set))
+    score += overlap * 18
+    score += int(intent_row.get("priority") or 0)
+    return score
+
+
+def _openai_exposure_intent_router_enabled() -> bool:
+    return bool(OPENAI_EXPOSURE_INTENT_ROUTER_ENABLED and OPENAI_API_KEY and OPENAI_MODEL)
+
+
+def _openai_assist_exposure_intent_mapping(
+    *,
+    question: str,
+    rules_top: list[dict[str, object]],
+) -> dict[str, object] | None:
+    if not _openai_exposure_intent_router_enabled():
+        return None
+    allowed = [
+        {
+            "intent": str(row.get("intent") or ""),
+            "description": str(row.get("description") or ""),
+        }
+        for row in (_EXPOSURE_INTENTS_LIBRARY.get("intents") or [])
+        if isinstance(row, dict)
+    ]
+    if not allowed:
+        return None
+    system_prompt = (
+        "You are an AML intent router. "
+        "Select one or more intents only from the provided intent catalog. "
+        "Return strict JSON with keys: intent_codes (array of strings), confidence (number 0..1), rationale (string). "
+        "Do not output intents outside the catalog."
+    )
+    user_prompt = {
+        "question": question,
+        "intent_catalog": allowed,
+        "rules_top_candidates": rules_top[:5],
+        "task": "Map the question to the best intent or combination of intents for exposure analysis.",
+    }
+    body = {
+        "model": OPENAI_MODEL,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_prompt)},
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=OPENAI_EXPOSURE_INTENT_ROUTER_TIMEOUT_SECONDS) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+        parsed = json.loads(content) if content else {}
+        intent_codes_raw = parsed.get("intent_codes")
+        confidence_raw = parsed.get("confidence")
+        rationale = str(parsed.get("rationale") or "").strip()
+        valid_codes: list[str] = []
+        allowed_codes = {
+            str(row.get("intent") or "")
+            for row in (_EXPOSURE_INTENTS_LIBRARY.get("intents") or [])
+            if isinstance(row, dict)
+        }
+        for code in (intent_codes_raw or []):
+            c = str(code or "").strip()
+            if not c or c not in allowed_codes:
+                continue
+            if c in valid_codes:
+                continue
+            valid_codes.append(c)
+        if not valid_codes:
+            return None
+        confidence = float(confidence_raw) if confidence_raw is not None else 0.0
+        if confidence < 0.0:
+            confidence = 0.0
+        if confidence > 1.0:
+            confidence = 1.0
+        return {
+            "intent_codes": valid_codes,
+            "confidence": confidence,
+            "rationale": rationale,
+        }
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return None
+
+
+def _select_exposure_intent_route(question: str) -> dict[str, object]:
+    question_norm = str(question or "").strip().lower()
+    question_terms = _exposure_question_terms(question_norm)
+    scored: list[tuple[int, dict[str, object]]] = []
+    for row in _EXPOSURE_INTENTS_LIBRARY.get("intents", []):
+        if not isinstance(row, dict):
+            continue
+        score = _intent_score(question_norm, question_terms, row)
+        scored.append((score, row))
+    scored.sort(key=lambda item: item[0], reverse=True)
+
+    rules_top: list[dict[str, object]] = []
+    for score, row in scored[:5]:
+        rules_top.append(
+            {
+                "intent": str(row.get("intent") or ""),
+                "description": str(row.get("description") or ""),
+                "score": int(score),
+            }
+        )
+
+    best_score = int(scored[0][0]) if scored else 0
+    second_score = int(scored[1][0]) if len(scored) > 1 else 0
+    normalized_score = min(1.0, float(best_score) / 300.0) if best_score > 0 else 0.0
+    margin = float(best_score - second_score) / float(best_score + 1) if best_score > 0 else 0.0
+    rule_confidence = max(0.0, min(1.0, (0.65 * normalized_score) + (0.35 * max(0.0, margin))))
+
+    selected_rows: list[dict[str, object]] = []
+    routing_mode = "rules_only"
+    router_rationale = ""
+
+    if scored and best_score > 0:
+        selected_rows.append(scored[0][1])
+        for score, row in scored[1:]:
+            if score <= 0:
+                continue
+            # Add secondary intents only when they are materially close to the primary signal.
+            if best_score > 0 and (float(score) / float(best_score)) >= 0.72:
+                selected_rows.append(row)
+            if len(selected_rows) >= 3:
+                break
+
+    needs_assist = (rule_confidence < EXPOSURE_INTENT_ROUTE_CONFIDENCE_THRESHOLD) or not selected_rows
+    if needs_assist:
+        llm_route = _openai_assist_exposure_intent_mapping(question=question, rules_top=rules_top)
+        if llm_route:
+            llm_codes = [str(v) for v in (llm_route.get("intent_codes") or []) if str(v)]
+            llm_rows: list[dict[str, object]] = []
+            for code in llm_codes:
+                try:
+                    llm_rows.append(_find_exposure_intent_definition(code))
+                except KeyError:
+                    continue
+            if llm_rows:
+                selected_rows = llm_rows[:3]
+                routing_mode = "rules_plus_openai_router"
+                router_rationale = str(llm_route.get("rationale") or "").strip()
+                llm_conf = float(llm_route.get("confidence") or 0.0)
+                rule_confidence = max(rule_confidence, max(0.0, min(1.0, llm_conf)))
+
+    if not selected_rows:
+        default_intent = str(_EXPOSURE_INTENTS_LIBRARY.get("default_intent") or "")
+        selected_rows = [_find_exposure_intent_definition(default_intent)]
+        routing_mode = "default_fallback"
+
+    primary = selected_rows[0]
+    return {
+        "primary_intent": primary,
+        "selected_intents": selected_rows,
+        "routing_mode": routing_mode,
+        "routing_confidence": rule_confidence,
+        "routing_rationale": router_rationale,
+        "rules_top_candidates": rules_top,
+    }
+
+
+def _merge_unique_strings(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        v = str(value or "").strip()
+        if not v:
+            continue
+        key = v.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(v)
+    return out
+
+
+_TX_DIRECTION_SYNONYMS: dict[str, set[str]] = {
+    "outbound": {"outbound", "outgoing", "sent", "egress", "to counterparty", "payments out"},
+    "inbound": {"inbound", "incoming", "received", "ingress", "from counterparty", "payments in"},
+}
+_TX_MECHANISM_SYNONYMS: dict[str, set[str]] = {
+    "wire": {"wire", "wires", "payments", "payment", "funds transfer", "transfer", "transfers", "swift", "mt103"},
+    "ach": {"ach", "automated clearing house"},
+    "online": {"online", "book transfer"},
+    "branch": {"branch", "teller"},
+    "atm": {"atm", "cash machine"},
+}
+
+
+def _openai_exposure_filter_mapper_enabled() -> bool:
+    return bool(OPENAI_EXPOSURE_FILTER_MAPPER_ENABLED and OPENAI_API_KEY and OPENAI_MODEL)
+
+
+def _catalog_list_values(catalog: dict[str, object], key: str) -> list[str]:
+    values = catalog.get(key) if isinstance(catalog, dict) else None
+    if not isinstance(values, list):
+        return []
+    return [str(v).strip() for v in values if str(v).strip()]
+
+
+def _deterministic_transaction_filter_mapping(
+    question: str,
+    catalog: dict[str, object],
+) -> tuple[dict[str, object], float, list[str]]:
+    q = str(question or "").lower()
+    reasons: list[str] = []
+    mapped: dict[str, object] = {}
+    confidence = 0.0
+
+    directions = {v.lower(): v for v in _catalog_list_values(catalog, "directions")}
+    mechanisms = {v.lower(): v for v in _catalog_list_values(catalog, "mechanisms")}
+
+    for canonical, terms in _TX_DIRECTION_SYNONYMS.items():
+        if canonical not in directions:
+            continue
+        if any(term in q for term in terms):
+            mapped["direction"] = directions[canonical]
+            reasons.append(f"Matched direction synonym set for `{canonical}`.")
+            confidence += 0.4
+            break
+
+    for canonical, terms in _TX_MECHANISM_SYNONYMS.items():
+        if canonical not in mechanisms:
+            continue
+        if any(term in q for term in terms):
+            mapped["mechanism_contains"] = mechanisms[canonical]
+            reasons.append(f"Matched mechanism synonym set for `{canonical}`.")
+            confidence += 0.4
+            break
+
+    if any(term in q for term in ("outside us", "outside the us", "non-us", "non us", "outside united states")):
+        mapped["outside_country_code_2"] = "US"
+        reasons.append("Detected outside-US geography phrase.")
+        confidence += 0.25
+
+    if any(term in q for term in ("wire", "wires", "payments", "payment")) and "mechanism_contains" not in mapped:
+        mapped["aml_classification_contains"] = "External Funds Transfer"
+        reasons.append("Fallback classification mapping for payment-like language.")
+        confidence += 0.15
+
+    return mapped, min(1.0, confidence), reasons
+
+
+def _openai_map_transaction_filters(
+    *,
+    question: str,
+    catalog: dict[str, object],
+    deterministic_mapped: dict[str, object],
+    deterministic_reasons: list[str],
+) -> dict[str, object] | None:
+    if not _openai_exposure_filter_mapper_enabled():
+        return None
+
+    payload = {
+        "question": question,
+        "allowed_values": {
+            "directions": _catalog_list_values(catalog, "directions"),
+            "mechanisms": _catalog_list_values(catalog, "mechanisms"),
+            "aml_classifications": _catalog_list_values(catalog, "aml_classifications"),
+            "country_codes_2": _catalog_list_values(catalog, "country_codes_2"),
+        },
+        "deterministic_candidate": deterministic_mapped,
+        "deterministic_reasons": deterministic_reasons,
+    }
+    system_prompt = (
+        "You map AML analyst language to structured transaction filters. "
+        "Use only allowed values. "
+        "Return strict JSON with keys: filters (object), confidence (number 0..1), rationale (string). "
+        "filters may include direction, mechanism_contains, aml_classification_contains, outside_country_code_2."
+    )
+    req_body = {
+        "model": OPENAI_MODEL,
+        "temperature": 0.0,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload)},
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps(req_body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=OPENAI_EXPOSURE_FILTER_MAPPER_TIMEOUT_SECONDS) as resp:
+            raw = resp.read().decode("utf-8")
+        parsed = json.loads(raw)
+        content = parsed.get("choices", [{}])[0].get("message", {}).get("content", "")
+        out = json.loads(content) if content else {}
+        filters = out.get("filters") if isinstance(out, dict) else None
+        confidence = float(out.get("confidence") or 0.0) if isinstance(out, dict) else 0.0
+        rationale = str(out.get("rationale") or "").strip() if isinstance(out, dict) else ""
+        if not isinstance(filters, dict):
+            return None
+        return {
+            "filters": filters,
+            "confidence": max(0.0, min(1.0, confidence)),
+            "rationale": rationale,
+        }
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return None
+
+
+def _validate_transaction_filter_mapping(filters: dict[str, object], catalog: dict[str, object]) -> dict[str, object]:
+    valid: dict[str, object] = {}
+    direction = str(filters.get("direction") or "").strip()
+    if direction:
+        direction_map = {v.lower(): v for v in _catalog_list_values(catalog, "directions")}
+        resolved = direction_map.get(direction.lower())
+        if resolved:
+            valid["direction"] = resolved
+
+    mechanism = str(filters.get("mechanism_contains") or "").strip()
+    if mechanism:
+        valid["mechanism_contains"] = mechanism
+
+    aml = str(filters.get("aml_classification_contains") or "").strip()
+    if aml:
+        valid["aml_classification_contains"] = aml
+
+    outside_cc = str(filters.get("outside_country_code_2") or "").strip().upper()
+    if outside_cc:
+        cc_map = {v.upper(): v.upper() for v in _catalog_list_values(catalog, "country_codes_2")}
+        resolved_cc = cc_map.get(outside_cc)
+        if resolved_cc:
+            valid["outside_country_code_2"] = resolved_cc
+    return valid
+
+
+def _normalize_transaction_filters_for_question(
+    *,
+    connection: TenantDataHubConnection,
+    question: str,
+    base_params: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    catalog = _proxy_data_hub_json(connection, "/api/graph/transaction-filter-catalog", {})
+    deterministic_filters, deterministic_confidence, deterministic_reasons = _deterministic_transaction_filter_mapping(
+        question,
+        catalog,
+    )
+    normalized = dict(base_params)
+    normalized.update(_validate_transaction_filter_mapping(deterministic_filters, catalog))
+    mode = "deterministic"
+    confidence = deterministic_confidence
+    rationale = "; ".join(deterministic_reasons)
+
+    if confidence < EXPOSURE_FILTER_MAPPER_CONFIDENCE_THRESHOLD:
+        llm = _openai_map_transaction_filters(
+            question=question,
+            catalog=catalog,
+            deterministic_mapped=deterministic_filters,
+            deterministic_reasons=deterministic_reasons,
+        )
+        if llm:
+            llm_filters = _validate_transaction_filter_mapping(
+                llm.get("filters") if isinstance(llm.get("filters"), dict) else {},
+                catalog,
+            )
+            if llm_filters:
+                normalized.update(llm_filters)
+                mode = "openai_mapper"
+                confidence = max(confidence, float(llm.get("confidence") or 0.0))
+                rationale = str(llm.get("rationale") or rationale)
+
+    mapping_info = {
+        "mode": mode,
+        "confidence": max(0.0, min(1.0, confidence)),
+        "rationale": rationale,
+        "deterministic_filters": deterministic_filters,
+        "applied_filters": {k: normalized.get(k) for k in ("direction", "mechanism_contains", "aml_classification_contains", "outside_country_code_2")},
+    }
+    return normalized, mapping_info
+
+
+def _select_exposure_intent_definition(question: str) -> dict[str, object]:
+    route = _select_exposure_intent_route(question)
+    primary = route.get("primary_intent")
+    if isinstance(primary, dict):
+        return primary
+    default_intent = str(_EXPOSURE_INTENTS_LIBRARY.get("default_intent") or "")
+    return _find_exposure_intent_definition(default_intent)
+
+
+def _build_exposure_query_plan_from_intent(
+    *,
+    intent_row: dict[str, object],
+    question: str,
+    seed_limit: int,
+    hops: int,
+    max_nodes: int,
+    max_edges: int,
+    include_surrogates: bool,
+    include_ofac_matches: bool,
+    include_txn_flow: bool,
+) -> dict[str, object]:
+    template = deepcopy(intent_row.get("query_plan_template") or {})
+    context = {
+        "question": question,
+        "seed_limit": int(seed_limit),
+        "hops": int(hops),
+        "max_nodes": int(max_nodes),
+        "max_edges": int(max_edges),
+        "include_surrogates": str(bool(include_surrogates)).lower(),
+        "include_ofac_matches": str(bool(include_ofac_matches)).lower(),
+        "include_txn_flow": str(bool(include_txn_flow)).lower(),
+    }
+    rendered = _render_template_placeholders(template, context)
+    query_plan = rendered if isinstance(rendered, dict) else {}
+    query_plan["intent"] = str(intent_row.get("intent") or "")
+    query_plan["intent_description"] = str(intent_row.get("description") or "")
+    query_plan["terms"] = _exposure_question_terms(question)
+    query_plan["intent_library_version"] = str(_EXPOSURE_INTENTS_LIBRARY.get("library_version") or "")
+    return query_plan
+
+
+def _query_plan_step_by_name(query_plan: dict[str, object], step_name: str) -> dict[str, object] | None:
+    steps = query_plan.get("steps")
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("name") or "").strip() == step_name:
+            return step
+    return None
+
+
+def _merge_graph_payloads(base_payload: dict[str, object], add_payload: dict[str, object]) -> dict[str, object]:
+    out = deepcopy(base_payload if isinstance(base_payload, dict) else {})
+    out_elements = out.get("elements") if isinstance(out.get("elements"), dict) else {}
+    out_nodes = out_elements.get("nodes") if isinstance(out_elements.get("nodes"), list) else []
+    out_edges = out_elements.get("edges") if isinstance(out_elements.get("edges"), list) else []
+
+    node_map: dict[str, dict[str, object]] = {}
+    for n in out_nodes:
+        if not isinstance(n, dict):
+            continue
+        data = n.get("data")
+        if not isinstance(data, dict):
+            continue
+        node_id = str(data.get("id") or "")
+        if not node_id:
+            continue
+        node_map[node_id] = n
+
+    edge_map: dict[str, dict[str, object]] = {}
+    for e in out_edges:
+        if not isinstance(e, dict):
+            continue
+        data = e.get("data")
+        if not isinstance(data, dict):
+            continue
+        edge_id = str(data.get("id") or "")
+        if not edge_id:
+            continue
+        edge_map[edge_id] = e
+
+    add_elements = add_payload.get("elements") if isinstance(add_payload, dict) else None
+    add_nodes = add_elements.get("nodes") if isinstance(add_elements, dict) and isinstance(add_elements.get("nodes"), list) else []
+    add_edges = add_elements.get("edges") if isinstance(add_elements, dict) and isinstance(add_elements.get("edges"), list) else []
+
+    for n in add_nodes:
+        if not isinstance(n, dict):
+            continue
+        data = n.get("data")
+        if not isinstance(data, dict):
+            continue
+        node_id = str(data.get("id") or "")
+        if node_id and node_id not in node_map:
+            node_map[node_id] = n
+
+    for e in add_edges:
+        if not isinstance(e, dict):
+            continue
+        data = e.get("data")
+        if not isinstance(data, dict):
+            continue
+        edge_id = str(data.get("id") or "")
+        if edge_id and edge_id not in edge_map:
+            edge_map[edge_id] = e
+
+    merged_nodes = list(node_map.values())
+    merged_edges = list(edge_map.values())
+    out["elements"] = {"nodes": merged_nodes, "edges": merged_edges}
+    out["node_count"] = len(merged_nodes)
+    out["edge_count"] = len(merged_edges)
+    if not str(out.get("center_node") or "").strip():
+        out["center_node"] = str(add_payload.get("center_node") or "")
+    return out
+
+
+def _parse_node_id(node_id: str) -> tuple[str, str]:
+    raw = str(node_id or "").strip()
+    if ":" not in raw:
+        return "", ""
+    node_type, business_key = raw.split(":", 1)
+    return node_type.strip(), business_key.strip()
+
+
+def _transaction_node_ids_from_rows(rows: list[dict[str, object]]) -> set[str]:
+    out: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        account_key = str(row.get("account_key") or "").strip()
+        counterparty_key = str(row.get("counterparty_account_key") or "").strip()
+        if account_key:
+            out.add(f"Account:{account_key}")
+        if counterparty_key:
+            out.add(f"CounterpartyAccount:{counterparty_key}")
+    return out
+
+
+def _seed_type_priority(node_type: str) -> int:
+    t = str(node_type or "").strip()
+    if t == "Customer":
+        return 100
+    if t == "Account":
+        return 90
+    if t == "CounterpartyAccount":
+        return 80
+    if t == "PanamaNode":
+        return 40
+    if t == "OfacSdn":
+        return 30
+    return 10
+
+
+def _ordered_seed_candidates(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    def _score(row: dict[str, object]) -> float:
+        node_type = str(row.get("node_type") or "")
+        base = int(row.get("score") or 0)
+        return float(base + _seed_type_priority(node_type))
+
+    return sorted(
+        [r for r in rows if isinstance(r, dict)],
+        key=_score,
+        reverse=True,
+    )
+
+
+def _summarize_exposure_graph(seed: dict[str, object], graph_payload: dict[str, object]) -> dict[str, object]:
+    elements = graph_payload.get("elements") if isinstance(graph_payload, dict) else None
+    nodes_raw = elements.get("nodes") if isinstance(elements, dict) else []
+    edges_raw = elements.get("edges") if isinstance(elements, dict) else []
+    nodes = nodes_raw if isinstance(nodes_raw, list) else []
+    edges = edges_raw if isinstance(edges_raw, list) else []
+
+    node_type_counts: dict[str, int] = {}
+    edge_type_counts: dict[str, int] = {}
+    node_lookup: dict[str, dict[str, object]] = {}
+
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        data = n.get("data")
+        if not isinstance(data, dict):
+            continue
+        node_id = str(data.get("id") or "")
+        node_type = str(data.get("node_type") or "Unknown")
+        node_lookup[node_id] = data
+        node_type_counts[node_type] = node_type_counts.get(node_type, 0) + 1
+
+    key_relationships: list[dict[str, object]] = []
+    for e in edges:
+        if not isinstance(e, dict):
+            continue
+        data = e.get("data")
+        if not isinstance(data, dict):
+            continue
+        edge_type = str(data.get("edge_type") or "EDGE")
+        edge_type_counts[edge_type] = edge_type_counts.get(edge_type, 0) + 1
+
+        if edge_type not in {"POTENTIAL_OFAC_MATCH", "PANAMA_RELATIONSHIP", "TXN_FLOW", "TXN_FLOW_SELF"}:
+            continue
+        src = str(data.get("source") or "")
+        dst = str(data.get("target") or "")
+        src_data = node_lookup.get(src, {})
+        dst_data = node_lookup.get(dst, {})
+        key_relationships.append(
+            {
+                "edge_type": edge_type,
+                "source": src,
+                "source_label": str(src_data.get("label") or src),
+                "source_type": str(src_data.get("node_type") or ""),
+                "target": dst,
+                "target_label": str(dst_data.get("label") or dst),
+                "target_type": str(dst_data.get("node_type") or ""),
+                "txn_count": int(data.get("txn_count") or 0),
+                "total_amount": float(data.get("total_amount") or 0.0),
+            }
+        )
+        if len(key_relationships) >= 12:
+            break
+
+    key_entities: list[dict[str, str]] = []
+    for node_id, data in node_lookup.items():
+        node_type = str(data.get("node_type") or "")
+        if node_type not in {"OfacSdn", "PanamaNode", "CounterpartyAccount"}:
+            continue
+        key_entities.append(
+            {
+                "node_id": node_id,
+                "node_type": node_type,
+                "label": str(data.get("label") or node_id),
+            }
+        )
+        if len(key_entities) >= 12:
+            break
+
+    return {
+        "seed": {
+            "node_id": str(seed.get("node_id") or ""),
+            "node_type": str(seed.get("node_type") or ""),
+            "label": str(seed.get("label") or ""),
+            "business_key": str(seed.get("business_key") or ""),
+            "matched_fields": seed.get("matched_fields") if isinstance(seed.get("matched_fields"), list) else [],
+            "score": int(seed.get("score") or 0),
+        },
+        "snapshot_id": str(graph_payload.get("snapshot_id") or ""),
+        "as_of_ts": str(graph_payload.get("as_of_ts") or ""),
+        "node_count": int(graph_payload.get("node_count") or len(nodes)),
+        "edge_count": int(graph_payload.get("edge_count") or len(edges)),
+        "node_type_counts": node_type_counts,
+        "edge_type_counts": edge_type_counts,
+        "key_entities": key_entities,
+        "key_relationships": key_relationships,
+    }
+
+
+def _deterministic_exposure_summary(
+    question: str,
+    intent: str,
+    evidence: list[dict[str, object]],
+) -> tuple[str, list[str]]:
+    if not evidence:
+        return (
+            "No exposure graph evidence was returned for the current question. Refine entity names or identifiers and retry.",
+            ["No seed entities produced graph evidence in this run."],
+        )
+
+    top = evidence[0]
+    seed = top.get("seed") if isinstance(top.get("seed"), dict) else {}
+    seed_label = str(seed.get("label") or seed.get("node_id") or "seed")
+    node_count = int(top.get("node_count") or 0)
+    edge_count = int(top.get("edge_count") or 0)
+    edge_types = top.get("edge_type_counts") if isinstance(top.get("edge_type_counts"), dict) else {}
+    ofac_matches = int(edge_types.get("POTENTIAL_OFAC_MATCH") or 0)
+    panama_links = int(edge_types.get("PANAMA_RELATIONSHIP") or 0)
+    txn_flows = int(edge_types.get("TXN_FLOW") or 0) + int(edge_types.get("TXN_FLOW_SELF") or 0)
+
+    summary = (
+        f"Intent `{intent}` evaluated against the question and grounded on the top exposure seed `{seed_label}`. "
+        f"The retrieved subgraph includes {node_count} nodes and {edge_count} edges."
+    )
+    findings: list[str] = []
+    if ofac_matches:
+        findings.append(f"Detected {ofac_matches} potential OFAC match relationship(s) in the analyzed exposure graph.")
+    if panama_links:
+        findings.append(f"Detected {panama_links} Panama relationship edge(s) linked to the analyzed seed network.")
+    if txn_flows:
+        findings.append(f"Detected {txn_flows} transaction-flow edge(s), indicating cash movement pathways in scope.")
+    if not findings:
+        findings.append(
+            "No sanctions/offshore/transaction-specialized edge types were found in the top subgraph; review nearby entities."
+        )
+    return summary, findings
+
+
+def _openai_exposure_grounded_summary(
+    *,
+    question: str,
+    intent: str,
+    intent_description: str,
+    query_plan: dict[str, object],
+    evidence: list[dict[str, object]],
+) -> dict[str, object] | None:
+    if not _openai_exposure_assistant_enabled():
+        return None
+    if not evidence:
+        return None
+
+    compact_evidence: list[dict[str, object]] = []
+    for row in evidence[:3]:
+        compact_evidence.append(
+            {
+                "seed": row.get("seed"),
+                "as_of_ts": row.get("as_of_ts"),
+                "node_count": row.get("node_count"),
+                "edge_count": row.get("edge_count"),
+                "node_type_counts": row.get("node_type_counts"),
+                "edge_type_counts": row.get("edge_type_counts"),
+                "key_entities": row.get("key_entities"),
+                "key_relationships": row.get("key_relationships"),
+            }
+        )
+
+    system_prompt = (
+        "You are an AML exposure copilot for analysts. "
+        "You must only use the provided query plan and evidence. "
+        "Do not invent facts. "
+        "Return strict JSON with keys: summary, why_relevant, assumptions, limitations. "
+        "assumptions and limitations must each be arrays of short strings."
+    )
+    user_prompt = {
+        "question": question,
+        "intent": intent,
+        "intent_description": intent_description,
+        "query_plan": query_plan,
+        "evidence": compact_evidence,
+    }
+
+    body = {
+        "model": OPENAI_MODEL,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_prompt)},
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=OPENAI_EXPOSURE_ASSISTANT_TIMEOUT_SECONDS) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+        parsed = json.loads(content) if content else {}
+        summary = str(parsed.get("summary") or "").strip()
+        why_relevant = str(parsed.get("why_relevant") or "").strip()
+        assumptions_raw = parsed.get("assumptions")
+        limitations_raw = parsed.get("limitations")
+        assumptions = [str(v).strip() for v in (assumptions_raw or []) if str(v).strip()]
+        limitations = [str(v).strip() for v in (limitations_raw or []) if str(v).strip()]
+        if not summary:
+            return None
+        return {
+            "summary": summary,
+            "why_relevant": why_relevant,
+            "assumptions": assumptions,
+            "limitations": limitations,
+        }
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError):
+        return None
 
 
 _SCOPE_FALLBACK = {
@@ -6352,6 +7285,397 @@ def entity_search_exposure_graph(
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")
 
 
+@app.post("/api/entity-search/exposure-question")
+def entity_search_exposure_question(
+    payload: ExposureQuestionRequest,
+    request: Request,
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+        allowed = is_platform_admin or _user_has_any_tenant_role(
+            db,
+            auth.user_email,
+            payload.tenant_id,
+            ("tenant_investigator", "tenant_admin"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Exposure Search requires tenant_investigator or tenant_admin.")
+
+        connection = _resolve_tenant_data_hub_connection_or_404(db, payload.tenant_id)
+        question = str(payload.question or "").strip()
+        if not question:
+            raise HTTPException(status_code=400, detail="question is required.")
+
+        intent_route = _select_exposure_intent_route(question)
+        intent_row = intent_route.get("primary_intent") if isinstance(intent_route.get("primary_intent"), dict) else {}
+        selected_intent_rows = [
+            row
+            for row in (intent_route.get("selected_intents") or [])
+            if isinstance(row, dict)
+        ]
+        if not intent_row:
+            intent_row = _find_exposure_intent_definition(str(_EXPOSURE_INTENTS_LIBRARY.get("default_intent") or ""))
+            selected_intent_rows = [intent_row]
+        intent = str(intent_row.get("intent") or "")
+        intent_description = str(intent_row.get("description") or "")
+        query_plan = _build_exposure_query_plan_from_intent(
+            intent_row=intent_row,
+            question=question,
+            seed_limit=int(payload.seed_limit),
+            hops=int(payload.hops),
+            max_nodes=int(payload.max_nodes),
+            max_edges=int(payload.max_edges),
+            include_surrogates=bool(payload.include_surrogates),
+            include_ofac_matches=bool(payload.include_ofac_matches),
+            include_txn_flow=bool(payload.include_txn_flow),
+        )
+        query_plan["intent_routing"] = {
+            "selected_intents": [str(row.get("intent") or "") for row in selected_intent_rows],
+            "routing_mode": str(intent_route.get("routing_mode") or ""),
+            "routing_confidence": float(intent_route.get("routing_confidence") or 0.0),
+            "routing_rationale": str(intent_route.get("routing_rationale") or ""),
+            "rules_top_candidates": intent_route.get("rules_top_candidates") if isinstance(intent_route.get("rules_top_candidates"), list) else [],
+        }
+
+        seed_step = _query_plan_step_by_name(query_plan, "seed_search") or {}
+        seed_endpoint = str(seed_step.get("endpoint") or "/api/graph/exposure-seed-search")
+        seed_params_raw = seed_step.get("params")
+        seed_params = seed_params_raw if isinstance(seed_params_raw, dict) else {"q": question, "limit": int(payload.seed_limit)}
+        if not str(seed_params.get("q") or "").strip():
+            seed_params["q"] = question
+        if int(seed_params.get("limit") or 0) < 1:
+            seed_params["limit"] = int(payload.seed_limit)
+
+        graph_step = _query_plan_step_by_name(query_plan, "graph_expansion") or {}
+        graph_endpoint = str(graph_step.get("endpoint") or "/api/graph/exposure")
+        graph_params_template_raw = graph_step.get("params")
+        graph_params_template = (
+            graph_params_template_raw
+            if isinstance(graph_params_template_raw, dict)
+            else {
+                "hops": int(payload.hops),
+                "max_nodes": int(payload.max_nodes),
+                "max_edges": int(payload.max_edges),
+                "include_surrogates": bool(payload.include_surrogates),
+                "include_ofac_matches": bool(payload.include_ofac_matches),
+                "include_txn_flow": bool(payload.include_txn_flow),
+            }
+        )
+
+        queried_data: list[dict[str, object]] = []
+        seed_payload = _proxy_data_hub_json(
+            connection,
+            seed_endpoint,
+            seed_params,
+        )
+        seed_rows_raw = seed_payload.get("results") if isinstance(seed_payload, dict) else []
+        seed_rows = seed_rows_raw if isinstance(seed_rows_raw, list) else []
+        top_seeds: list[dict[str, object]] = []
+        top_seed_count = max(1, min(int(intent_row.get("top_seed_count") or 3), 10))
+        for row in seed_rows:
+            if isinstance(row, dict):
+                top_seeds.append(row)
+            if len(top_seeds) >= top_seed_count:
+                break
+        ordered_seeds = _ordered_seed_candidates(top_seeds)
+        graph_seed_candidates = ordered_seeds
+        tx_seed_candidates = [
+            row
+            for row in ordered_seeds
+            if str(row.get("node_type") or "") in {"Customer", "Account", "CounterpartyAccount"}
+        ] or ordered_seeds
+
+        queried_data.append(
+            {
+                "step": "seed_search",
+                "endpoint": seed_endpoint,
+                "params": seed_params,
+                "result_count": int(seed_payload.get("result_count") or len(seed_rows)),
+                "seed_candidates": [
+                    {
+                        "node_id": str(row.get("node_id") or ""),
+                        "node_type": str(row.get("node_type") or ""),
+                        "score": int(row.get("score") or 0),
+                    }
+                    for row in graph_seed_candidates[:10]
+                ],
+            }
+        )
+
+        evidence: list[dict[str, object]] = []
+        aggregate_node_type_counts: dict[str, int] = {}
+        aggregate_edge_type_counts: dict[str, int] = {}
+        selected_graph_payload: dict[str, object] | None = None
+        selected_graph_seed_node_id: str | None = None
+        for seed in graph_seed_candidates:
+            node_id = str(seed.get("node_id") or "").strip()
+            if not node_id:
+                continue
+            graph_params = dict(graph_params_template)
+            graph_params["node_id"] = node_id
+            graph_payload = _proxy_data_hub_json(
+                connection,
+                graph_endpoint,
+                graph_params,
+            )
+            if selected_graph_payload is None:
+                selected_graph_payload = graph_payload
+                selected_graph_seed_node_id = node_id
+            queried_data.append(
+                {
+                    "step": "graph_expansion",
+                    "endpoint": graph_endpoint,
+                    "params": graph_params,
+                    "result_node_count": int(graph_payload.get("node_count") or 0),
+                    "result_edge_count": int(graph_payload.get("edge_count") or 0),
+                    "snapshot_id": str(graph_payload.get("snapshot_id") or ""),
+                    "as_of_ts": str(graph_payload.get("as_of_ts") or ""),
+                }
+            )
+            graph_summary = _summarize_exposure_graph(seed, graph_payload)
+            evidence.append(graph_summary)
+            node_counts = graph_summary.get("node_type_counts") if isinstance(graph_summary.get("node_type_counts"), dict) else {}
+            edge_counts = graph_summary.get("edge_type_counts") if isinstance(graph_summary.get("edge_type_counts"), dict) else {}
+            for k, v in node_counts.items():
+                aggregate_node_type_counts[str(k)] = aggregate_node_type_counts.get(str(k), 0) + int(v or 0)
+            for k, v in edge_counts.items():
+                aggregate_edge_type_counts[str(k)] = aggregate_edge_type_counts.get(str(k), 0) + int(v or 0)
+
+
+        transaction_evidence: list[dict[str, object]] = []
+        tx_step = _query_plan_step_by_name(query_plan, "transaction_details") or {}
+        tx_endpoint = str(tx_step.get("endpoint") or "").strip()
+        tx_params_template_raw = tx_step.get("params")
+        tx_params_template = tx_params_template_raw if isinstance(tx_params_template_raw, dict) else {}
+        tx_mapping_info: dict[str, object] | None = None
+        transaction_linked_node_ids: set[str] = set()
+        if tx_endpoint:
+            normalized_tx_params_base, tx_mapping_info = _normalize_transaction_filters_for_question(
+                connection=connection,
+                question=question,
+                base_params=tx_params_template,
+            )
+            queried_data.append(
+                {
+                    "step": "transaction_filter_mapping",
+                    "endpoint": "/api/graph/transaction-filter-catalog",
+                    "mapping": tx_mapping_info,
+                }
+            )
+            for seed in tx_seed_candidates[:4]:
+                node_id = str(seed.get("node_id") or "").strip()
+                if not node_id:
+                    continue
+                tx_params = dict(normalized_tx_params_base)
+                tx_params["node_id"] = node_id
+                if int(tx_params.get("hops") or 0) < 1:
+                    tx_params["hops"] = int(payload.hops)
+                if int(tx_params.get("limit") or 0) < 1:
+                    tx_params["limit"] = 200
+                tx_payload = _proxy_data_hub_json(
+                    connection,
+                    tx_endpoint,
+                    tx_params,
+                )
+                tx_rows = tx_payload.get("rows") if isinstance(tx_payload.get("rows"), list) else []
+                transaction_linked_node_ids.update(
+                    _transaction_node_ids_from_rows([r for r in tx_rows if isinstance(r, dict)])
+                )
+                queried_data.append(
+                    {
+                        "step": "transaction_details",
+                        "endpoint": tx_endpoint,
+                        "params": tx_params,
+                        "result_row_count": int(tx_payload.get("row_count") or 0),
+                    }
+                )
+                transaction_evidence.append(
+                    {
+                        "seed_node_id": node_id,
+                        "row_count": int(tx_payload.get("row_count") or 0),
+                        "summary": tx_payload.get("summary") if isinstance(tx_payload.get("summary"), dict) else {},
+                        "sample_rows": tx_rows[:25] if isinstance(tx_rows, list) else [],
+                        "filter_mapping": tx_mapping_info,
+                    }
+                )
+
+        enriched_transaction_nodes: list[str] = []
+        if bool(payload.include_graph) and selected_graph_payload and transaction_linked_node_ids:
+            selected_elements = (
+                selected_graph_payload.get("elements")
+                if isinstance(selected_graph_payload.get("elements"), dict)
+                else {}
+            )
+            selected_nodes = selected_elements.get("nodes") if isinstance(selected_elements.get("nodes"), list) else []
+            existing_node_ids = {
+                str((n.get("data", {}) or {}).get("id") or "")
+                for n in selected_nodes
+                if isinstance(n, dict)
+            }
+            candidate_node_ids = sorted(
+                [nid for nid in transaction_linked_node_ids if nid and nid not in existing_node_ids]
+            )[:8]
+            for tx_node_id in candidate_node_ids:
+                enrich_params = dict(graph_params_template)
+                enrich_params["node_id"] = tx_node_id
+                enrich_params["hops"] = min(int(payload.hops), 2)
+                enrich_params["max_nodes"] = min(int(payload.max_nodes), 350)
+                enrich_params["max_edges"] = min(int(payload.max_edges), 1200)
+                enrich_payload = _proxy_data_hub_json(
+                    connection,
+                    graph_endpoint,
+                    enrich_params,
+                )
+                selected_graph_payload = _merge_graph_payloads(selected_graph_payload, enrich_payload)
+                enriched_transaction_nodes.append(tx_node_id)
+
+                node_type, business_key = _parse_node_id(tx_node_id)
+                tx_seed = {
+                    "node_id": tx_node_id,
+                    "node_type": node_type,
+                    "business_key": business_key,
+                    "label": tx_node_id,
+                }
+                tx_graph_summary = _summarize_exposure_graph(tx_seed, enrich_payload)
+                evidence.append(tx_graph_summary)
+                node_counts = tx_graph_summary.get("node_type_counts") if isinstance(tx_graph_summary.get("node_type_counts"), dict) else {}
+                edge_counts = tx_graph_summary.get("edge_type_counts") if isinstance(tx_graph_summary.get("edge_type_counts"), dict) else {}
+                for k, v in node_counts.items():
+                    aggregate_node_type_counts[str(k)] = aggregate_node_type_counts.get(str(k), 0) + int(v or 0)
+                for k, v in edge_counts.items():
+                    aggregate_edge_type_counts[str(k)] = aggregate_edge_type_counts.get(str(k), 0) + int(v or 0)
+
+                queried_data.append(
+                    {
+                        "step": "transaction_node_graph_enrichment",
+                        "endpoint": graph_endpoint,
+                        "params": enrich_params,
+                        "result_node_count": int(enrich_payload.get("node_count") or 0),
+                        "result_edge_count": int(enrich_payload.get("edge_count") or 0),
+                    }
+                )
+
+        deterministic_summary, deterministic_findings = _deterministic_exposure_summary(question, intent, evidence)
+        assumptions = _merge_unique_strings(
+            [
+                str(v)
+                for row in selected_intent_rows
+                for v in (row.get("assumptions") or [])
+                if str(v).strip()
+            ]
+        )
+        if not assumptions:
+            assumptions = [
+                "Results are constrained to the tenant's configured Data Hub connection and active snapshot content.",
+                "Seed matching is lexical and may miss semantically related names not present in matched fields.",
+                "Graph scope is limited by hops/max_nodes/max_edges controls.",
+            ]
+        limitations = _merge_unique_strings(
+            [
+                str(v)
+                for row in selected_intent_rows
+                for v in (row.get("limitations") or [])
+                if str(v).strip()
+            ]
+        )
+        if not limitations:
+            limitations = [
+                "No external data sources were queried beyond the configured Data Hub APIs.",
+                "Absence of a relationship in this response is not evidence of true absence in all systems.",
+            ]
+
+        llm_result = _openai_exposure_grounded_summary(
+            question=question,
+            intent=intent,
+            intent_description=intent_description,
+            query_plan=query_plan,
+            evidence=evidence,
+        )
+        mode = "deterministic"
+        final_summary = deterministic_summary
+        relevance_explanation = deterministic_findings
+        if llm_result:
+            mode = "grounded_openai"
+            final_summary = str(llm_result.get("summary") or deterministic_summary)
+            why_relevant = str(llm_result.get("why_relevant") or "").strip()
+            relevance_explanation = ([why_relevant] if why_relevant else []) + deterministic_findings
+            llm_assumptions = llm_result.get("assumptions") if isinstance(llm_result.get("assumptions"), list) else []
+            llm_limitations = llm_result.get("limitations") if isinstance(llm_result.get("limitations"), list) else []
+            assumptions = [str(v) for v in llm_assumptions if str(v).strip()] or assumptions
+            limitations = [str(v) for v in llm_limitations if str(v).strip()] or limitations
+
+        audit_payload = {
+            "tenant_id": int(payload.tenant_id),
+            "question": question,
+            "intent": intent,
+            "mode": mode,
+            "query_plan": query_plan,
+            "queried_data": queried_data,
+            "evidence_count": len(evidence),
+            "intent_library_version": str(_EXPOSURE_INTENTS_LIBRARY.get("library_version") or ""),
+            "intent_routing": query_plan.get("intent_routing"),
+            "transaction_filter_mapping": tx_mapping_info,
+            "enriched_transaction_nodes": enriched_transaction_nodes,
+            "seed_selection": {
+                "graph_seed_candidates": [str(row.get("node_id") or "") for row in graph_seed_candidates[:10]],
+                "transaction_seed_candidates": [str(row.get("node_id") or "") for row in tx_seed_candidates[:10]],
+            },
+            "top_seed_node_ids": [str((row.get("seed") or {}).get("node_id") or "") for row in evidence if isinstance(row, dict)],
+        }
+        _record_audit_event(
+            db,
+            module_code="entity_search",
+            action="exposure_question_answered",
+            tenant_id=int(payload.tenant_id),
+            entity_type="exposure_question",
+            entity_id=None,
+            actor_user_id=_get_user_id_by_email(db, auth.user_email or ""),
+            actor_email=auth.user_email,
+            request=request,
+            payload=audit_payload,
+        )
+        db.commit()
+
+        return {
+            "question": question,
+            "intent": intent,
+            "intent_description": intent_description,
+            "intents": [str(row.get("intent") or "") for row in selected_intent_rows],
+            "intent_routing": query_plan.get("intent_routing"),
+            "structured_query_plan": query_plan,
+            "queried_data": queried_data,
+            "mode": mode,
+            "summary": final_summary,
+            "relevance_explanation": relevance_explanation,
+            "relationship_findings": {
+                "aggregate_node_type_counts": aggregate_node_type_counts,
+                "aggregate_edge_type_counts": aggregate_edge_type_counts,
+            },
+            "evidence": evidence,
+            "graph_payload": selected_graph_payload if bool(payload.include_graph) else None,
+            "graph_seed_node_id": selected_graph_seed_node_id,
+            "transaction_evidence": transaction_evidence,
+            "transaction_filter_mapping": tx_mapping_info,
+            "enriched_transaction_nodes": enriched_transaction_nodes,
+            "seed_selection": {
+                "graph_seed_candidates": [str(row.get("node_id") or "") for row in graph_seed_candidates[:10]],
+                "transaction_seed_candidates": [str(row.get("node_id") or "") for row in tx_seed_candidates[:10]],
+            },
+            "assumptions": assumptions,
+            "limitations": limitations,
+            "audit_trail": {
+                "module_code": "entity_search",
+                "action": "exposure_question_answered",
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
 @app.get("/api/entity-search/node-neighbors")
 def entity_search_node_neighbors(
     tenant_id: int = Query(..., ge=1),
@@ -6393,6 +7717,55 @@ def entity_search_node_neighbors(
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")
 
+
+
+
+@app.get("/api/entity-search/exposure-transactions")
+def entity_search_exposure_transactions(
+    tenant_id: int = Query(..., ge=1),
+    node_id: str = Query(..., min_length=1),
+    hops: int = Query(default=2, ge=1, le=5),
+    limit: int = Query(default=500, ge=1, le=10000),
+    outside_country_code_2: str | None = Query(default=None),
+    direction: str | None = Query(default=None),
+    aml_classification_contains: str | None = Query(default=None),
+    mechanism_contains: str | None = Query(default=None),
+    include_surrogates: bool = Query(default=True),
+    include_ofac_matches: bool = Query(default=True),
+    include_txn_flow: bool = Query(default=True),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+        allowed = is_platform_admin or _user_has_any_tenant_role(
+            db,
+            auth.user_email,
+            tenant_id,
+            ("tenant_investigator", "tenant_admin"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Exposure Search requires tenant_investigator or tenant_admin.")
+
+        connection = _resolve_tenant_data_hub_connection_or_404(db, tenant_id)
+        return _proxy_data_hub_json(
+            connection,
+            "/api/graph/exposure/transactions",
+            {
+                "node_id": node_id.strip(),
+                "hops": hops,
+                "limit": limit,
+                "outside_country_code_2": (outside_country_code_2 or "").strip() or None,
+                "direction": (direction or "").strip() or None,
+                "aml_classification_contains": (aml_classification_contains or "").strip() or None,
+                "mechanism_contains": (mechanism_contains or "").strip() or None,
+                "include_surrogates": include_surrogates,
+                "include_ofac_matches": include_ofac_matches,
+                "include_txn_flow": include_txn_flow,
+            },
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
 
 @app.get("/api/entity-search/customer-transactions")
 def entity_search_customer_transactions(

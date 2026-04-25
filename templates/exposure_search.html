@@ -18,12 +18,14 @@
       .grid { display:grid; grid-template-columns: repeat(4,minmax(160px,1fr)); gap:0.6rem; }
       label { font-size:0.9rem; display:block; }
       input, select, button { width:100%; box-sizing:border-box; margin-top:0.2rem; padding:0.55rem; border-radius:8px; border:1px solid #b7c7d6; font-family: inherit; }
+      textarea { width:100%; box-sizing:border-box; margin-top:0.2rem; padding:0.55rem; border-radius:8px; border:1px solid #b7c7d6; font-family: inherit; min-height: 96px; resize: vertical; }
       button { border:none; background:#1f5f8b; color:#fff; cursor:pointer; }
       button.secondary { background:#5f7489; }
       .msg { min-height:1.2rem; color:#1f5f8b; margin-top: 0.5rem; }
       .subtle { color:#4d6478; font-size:0.9rem; }
       table { width:100%; border-collapse: collapse; }
       th, td { text-align:left; padding:0.45rem; border-bottom:1px solid #d8e1e9; vertical-align: top; font-size:0.93rem; }
+      pre { background:#f4f8fc; border:1px solid #d8e1e9; border-radius:8px; padding:0.6rem; overflow:auto; font-size:0.82rem; }
       #graph { width: 100%; height: 74vh; min-height: 620px; border: 1px solid #d8e1e9; border-radius: 10px; background: #fff; }
       .graph-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 0.8rem; align-items: start; }
       .graph-main { min-width: 0; }
@@ -43,6 +45,65 @@
         <p>Signed in as <strong>{{ user }}</strong>. Search across customer, account, counterparty, OFAC, and Panama notes.</p>
         <p><a href="/dashboard">Back to dashboard</a></p>
       </div>
+
+      <details class="panel" open>
+        <summary class="accordion-title">Grounded Exposure Assistant</summary>
+        <div class="accordion-body">
+          <p class="subtle">Natural language question -> intent detection -> query plan -> graph retrieval -> grounded summary -> audit trail.</p>
+          <label>Question
+            <textarea id="questionInput" placeholder="Example: Show potential sanctions and offshore exposure around ARIGATO and explain why it is relevant."></textarea>
+          </label>
+          <div style="margin-top:0.7rem; display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem;">
+            <button onclick="analyzeQuestion()">Analyze Question</button>
+            <button class="secondary" onclick="clearQuestionAnalysis()">Clear Analysis</button>
+          </div>
+          <div id="qaStatus" class="msg"></div>
+          <div style="margin-top:0.7rem;">
+            <div><strong>Intent</strong>: <span id="qaIntent" class="subtle">-</span></div>
+            <div><strong>Mode</strong>: <span id="qaMode" class="subtle">-</span></div>
+            <div style="margin-top:0.5rem;"><strong>Grounded Summary</strong></div>
+            <div id="qaSummary" class="subtle">Run analysis to generate a grounded summary.</div>
+            <div style="margin-top:0.5rem;"><strong>Why Relevant</strong></div>
+            <ul id="qaRelevance" class="subtle"></ul>
+            <div style="margin-top:0.5rem;"><strong>What Data Was Queried</strong></div>
+            <pre id="qaQueriedData">-</pre>
+            <div style="margin-top:0.5rem;"><strong>Structured Query Plan</strong></div>
+            <pre id="qaPlan">-</pre>
+            <div style="margin-top:0.5rem;"><strong>Relationship Findings</strong></div>
+            <pre id="qaFindings">-</pre>
+            <div style="margin-top:0.5rem;"><strong>Transaction Detail Evidence</strong></div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Seed</th>
+                  <th>Rows</th>
+                  <th>Total Amount</th>
+                  <th>Top Countries</th>
+                </tr>
+              </thead>
+              <tbody id="qaTransactionRows"></tbody>
+            </table>
+            <div style="margin-top:0.5rem;"><strong>Evidence (Top Seeds)</strong></div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Seed</th>
+                  <th>Node/Edge Count</th>
+                  <th>Key Types</th>
+                  <th>As Of</th>
+                </tr>
+              </thead>
+              <tbody id="qaEvidenceRows"></tbody>
+            </table>
+            <div style="margin-top:0.5rem;"><strong>Assumptions</strong></div>
+            <ul id="qaAssumptions" class="subtle"></ul>
+            <div style="margin-top:0.5rem;"><strong>Limitations</strong></div>
+            <ul id="qaLimitations" class="subtle"></ul>
+            <div style="margin-top:0.5rem;"><strong>Audit</strong></div>
+            <pre id="qaAudit">-</pre>
+          </div>
+        </div>
+      </details>
 
       <details class="panel" open>
         <summary class="accordion-title">Exposure Search</summary>
@@ -142,6 +203,12 @@
       }
       async function call(path) {
         const res = await fetch(path, { method: "GET", headers: headers() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
+        return data;
+      }
+      async function callJson(path, method, payloadObj) {
+        const res = await fetch(path, { method: method || "POST", headers: headers(), body: JSON.stringify(payloadObj || {}) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error((data && data.detail) ? JSON.stringify(data.detail) : ("HTTP " + res.status));
         return data;
@@ -433,8 +500,9 @@
         clearDetails();
         msg("Graph cleared.");
       }
-      function renderGraph(payload) {
-        const collapsed = collapseInitialGraph(payload, EXPAND_HINT_THRESHOLD);
+      function renderGraph(payload, options={}) {
+        const useCollapse = !(options && options.collapse === false);
+        const collapsed = useCollapse ? collapseInitialGraph(payload, EXPAND_HINT_THRESHOLD) : payload;
         const graphDiv = el("graph");
         const nodes = ((collapsed.elements || {}).nodes || []).map((n) => {
           const data = n.data || {};
@@ -492,6 +560,137 @@
       function zoomGraphIn() { if (!cy) return; cy.zoom({ level: cy.zoom() * 1.2, renderedPosition: { x: cy.width()/2, y: cy.height()/2 } }); }
       function zoomGraphOut() { if (!cy) return; cy.zoom({ level: cy.zoom() / 1.2, renderedPosition: { x: cy.width()/2, y: cy.height()/2 } }); }
       function resetGraphView() { if (!cy) return; cy.fit(undefined, 20); cy.center(); }
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+      function renderSimpleList(id, values) {
+        const node = el(id);
+        if (!node) return;
+        node.innerHTML = "";
+        const rows = Array.isArray(values) ? values : [];
+        if (!rows.length) {
+          const li = document.createElement("li");
+          li.textContent = "-";
+          node.appendChild(li);
+          return;
+        }
+        for (const row of rows) {
+          const li = document.createElement("li");
+          li.textContent = String(row || "");
+          node.appendChild(li);
+        }
+      }
+      function clearQuestionAnalysis() {
+        el("qaStatus").textContent = "";
+        el("qaIntent").textContent = "-";
+        el("qaMode").textContent = "-";
+        el("qaSummary").textContent = "Run analysis to generate a grounded summary.";
+        el("qaQueriedData").textContent = "-";
+        el("qaPlan").textContent = "-";
+        el("qaFindings").textContent = "-";
+        el("qaAudit").textContent = "-";
+        renderSimpleList("qaRelevance", []);
+        renderSimpleList("qaAssumptions", []);
+        renderSimpleList("qaLimitations", []);
+        const rows = el("qaEvidenceRows");
+        if (rows) rows.innerHTML = "";
+        const txRows = el("qaTransactionRows");
+        if (txRows) txRows.innerHTML = "";
+      }
+      function renderQuestionAnalysis(data) {
+        const intents = Array.isArray(data.intents) ? data.intents.filter(Boolean) : [];
+        const routing = (data.intent_routing && typeof data.intent_routing === "object") ? data.intent_routing : {};
+        const confidence = Number(routing.routing_confidence || 0);
+        const routingMode = String(routing.routing_mode || "");
+        const intentText = intents.length
+          ? intents.join(", ")
+          : String(data.intent || "-");
+        const descText = data.intent_description ? ` - ${data.intent_description}` : "";
+        const routeText = routingMode ? ` [${routingMode}${Number.isFinite(confidence) ? `, ${Math.round(confidence * 100)}%` : ""}]` : "";
+        el("qaIntent").textContent = `${intentText}${descText}${routeText}`;
+        el("qaMode").textContent = data.mode || "-";
+        el("qaSummary").textContent = data.summary || "-";
+        el("qaQueriedData").textContent = JSON.stringify(data.queried_data || [], null, 2);
+        el("qaPlan").textContent = JSON.stringify(data.structured_query_plan || {}, null, 2);
+        el("qaFindings").textContent = JSON.stringify(data.relationship_findings || {}, null, 2);
+        el("qaAudit").textContent = JSON.stringify(data.audit_trail || {}, null, 2);
+        renderSimpleList("qaRelevance", data.relevance_explanation || []);
+        renderSimpleList("qaAssumptions", data.assumptions || []);
+        renderSimpleList("qaLimitations", data.limitations || []);
+
+        const txBody = el("qaTransactionRows");
+        if (txBody) {
+          txBody.innerHTML = "";
+          const txEvidence = Array.isArray(data.transaction_evidence) ? data.transaction_evidence : [];
+          for (const tx of txEvidence) {
+            const summary = (tx && tx.summary && typeof tx.summary === "object") ? tx.summary : {};
+            const countries = Array.isArray(summary.top_countries) ? summary.top_countries.slice(0, 3).map((r) => `${r.country_code_2}:${r.txn_count}`).join(", ") : "-";
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${escapeHtml(tx.seed_node_id || "-")}</td>
+              <td>${Number(tx.row_count || 0)}</td>
+              <td>${Number(summary.total_amount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+              <td>${escapeHtml(countries)}</td>
+            `;
+            txBody.appendChild(tr);
+          }
+        }
+
+        const tbody = el("qaEvidenceRows");
+        if (!tbody) return;
+        tbody.innerHTML = "";
+        const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+        for (const row of evidence) {
+          const seed = row.seed || {};
+          const typeCounts = row.node_type_counts || {};
+          const topTypes = Object.entries(typeCounts)
+            .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+            .slice(0, 3)
+            .map(([k, v]) => `${k}:${v}`)
+            .join(", ");
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${escapeHtml(seed.label || seed.node_id || "-")}<br><span class="subtle">${escapeHtml(seed.node_type || "")}</span></td>
+            <td>${Number(row.node_count || 0)} / ${Number(row.edge_count || 0)}</td>
+            <td>${escapeHtml(topTypes || "-")}</td>
+            <td>${escapeHtml(row.as_of_ts || "-")}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }
+      async function analyzeQuestion() {
+        const question = String(el("questionInput").value || "").trim();
+        const tenantId = selectedTenantId();
+        if (!tenantId) { msg("Select a tenant.", true); return; }
+        if (!question) { msg("Enter a question first.", true); return; }
+        try {
+          el("qaStatus").textContent = "Running intent + plan + evidence retrieval...";
+          const payload = await callJson("/api/entity-search/exposure-question", "POST", {
+            tenant_id: tenantId,
+            question,
+            seed_limit: Number(el("resultLimit").value || 25),
+            hops: Number(el("hops").value || 2),
+            max_nodes: Number(el("maxNodes").value || 500),
+            max_edges: Number(el("maxEdges").value || 2000),
+            include_graph: true,
+          });
+          renderQuestionAnalysis(payload || {});
+          if (payload && payload.graph_payload && payload.graph_payload.elements) {
+            renderGraph(payload.graph_payload, { collapse: false });
+            clearDetails();
+          }
+          el("qaStatus").textContent = `Analysis complete (${payload.mode || "deterministic"}).`;
+          msg("Grounded exposure analysis updated.");
+        } catch (e) {
+          el("qaStatus").textContent = `Analysis failed: ${e.message}`;
+          msg(`Analysis failed: ${e.message}`, true);
+        }
+      }
 
       async function runSearch() {
         const q = String(el("searchText").value || "").trim();
@@ -544,7 +743,7 @@
           params.set("max_nodes", String(Number(el("maxNodes").value || 500)));
           params.set("max_edges", String(Number(el("maxEdges").value || 2000)));
           const payload = await call("/api/entity-search/exposure-graph?" + params.toString());
-          renderGraph(payload);
+          renderGraph(payload, { collapse: true });
           clearDetails();
           msg(`Graph loaded for ${nodeId}: ${payload.node_count || 0} nodes, ${payload.edge_count || 0} edges.`);
         } catch (e) {
@@ -553,6 +752,7 @@
       }
 
       initResolvedTenantLabel();
+      clearQuestionAnalysis();
       clearDetails();
     </script>
   </body>
