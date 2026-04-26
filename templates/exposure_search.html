@@ -61,6 +61,10 @@
           <div style="margin-top:0.7rem;">
             <div><strong>Intent</strong>: <span id="qaIntent" class="subtle">-</span></div>
             <div><strong>Mode</strong>: <span id="qaMode" class="subtle">-</span></div>
+            <div style="margin-top:0.5rem;"><strong>Interpreted Query</strong></div>
+            <div id="qaInterpretation" class="subtle">-</div>
+            <div id="qaClarification" style="margin-top:0.5rem;"></div>
+            <pre id="qaInterpretedQuery">-</pre>
             <div style="margin-top:0.5rem;"><strong>Grounded Summary</strong></div>
             <div id="qaSummary" class="subtle">Run analysis to generate a grounded summary.</div>
             <div style="margin-top:0.5rem;"><strong>Why Relevant</strong></div>
@@ -190,6 +194,7 @@
       const expandedByNode = new Map();
       let lastFocusedElementSig = "";
       let lastFocusedAtMs = 0;
+      let lastQuestionPayload = null;
       const FOCUS_DEBOUNCE_MS = 60;
 
       function el(id) { return document.getElementById(id); }
@@ -586,9 +591,14 @@
         }
       }
       function clearQuestionAnalysis() {
+        lastQuestionPayload = null;
         el("qaStatus").textContent = "";
         el("qaIntent").textContent = "-";
         el("qaMode").textContent = "-";
+        el("qaInterpretation").textContent = "-";
+        const clarification = el("qaClarification");
+        if (clarification) clarification.innerHTML = "";
+        el("qaInterpretedQuery").textContent = "-";
         el("qaSummary").textContent = "Run analysis to generate a grounded summary.";
         el("qaQueriedData").textContent = "-";
         el("qaPlan").textContent = "-";
@@ -614,6 +624,10 @@
         const routeText = routingMode ? ` [${routingMode}${Number.isFinite(confidence) ? `, ${Math.round(confidence * 100)}%` : ""}]` : "";
         el("qaIntent").textContent = `${intentText}${descText}${routeText}`;
         el("qaMode").textContent = data.mode || "-";
+        const interpreted = (data.interpreted_query && typeof data.interpreted_query === "object") ? data.interpreted_query : {};
+        el("qaInterpretation").textContent = interpreted.natural_language || "-";
+        el("qaInterpretedQuery").textContent = JSON.stringify(interpreted || {}, null, 2);
+        renderClarification(data);
         el("qaSummary").textContent = data.summary || "-";
         el("qaQueriedData").textContent = JSON.stringify(data.queried_data || [], null, 2);
         el("qaPlan").textContent = JSON.stringify(data.structured_query_plan || {}, null, 2);
@@ -663,29 +677,70 @@
           tbody.appendChild(tr);
         }
       }
-      async function analyzeQuestion() {
+      function renderClarification(data) {
+        const box = el("qaClarification");
+        if (!box) return;
+        box.innerHTML = "";
+        const clarification = (data && data.clarification && typeof data.clarification === "object") ? data.clarification : null;
+        const choices = clarification && Array.isArray(clarification.choices) ? clarification.choices : [];
+        if (!clarification || !choices.length) return;
+        const prompt = document.createElement("div");
+        prompt.className = "subtle";
+        prompt.style.marginBottom = "0.35rem";
+        prompt.textContent = String(clarification.question || "Clarify the interpretation.");
+        box.appendChild(prompt);
+        const grid = document.createElement("div");
+        grid.style.display = "grid";
+        grid.style.gridTemplateColumns = "repeat(auto-fit, minmax(190px, 1fr))";
+        grid.style.gap = "0.45rem";
+        for (const choice of choices) {
+          const btn = document.createElement("button");
+          btn.className = "secondary";
+          btn.type = "button";
+          btn.textContent = String(choice.label || "Apply clarification");
+          btn.title = String(choice.description || "");
+          btn.onclick = () => applyClarification(choice);
+          grid.appendChild(btn);
+        }
+        box.appendChild(grid);
+      }
+      async function applyClarification(choice) {
+        if (!lastQuestionPayload) { msg("No prior question payload to clarify.", true); return; }
+        const filters = (choice && choice.filters && typeof choice.filters === "object") ? choice.filters : {};
+        const label = String((choice && choice.label) || "clarification");
+        await analyzeQuestion({ ...lastQuestionPayload, filter_overrides: filters }, `Applying clarification: ${label}...`);
+      }
+      async function analyzeQuestion(existingPayload=null, statusText=null) {
         const question = String(el("questionInput").value || "").trim();
         const tenantId = selectedTenantId();
         if (!tenantId) { msg("Select a tenant.", true); return; }
         if (!question) { msg("Enter a question first.", true); return; }
         try {
-          el("qaStatus").textContent = "Running intent + plan + evidence retrieval...";
-          const payload = await callJson("/api/entity-search/exposure-question", "POST", {
+          el("qaStatus").textContent = statusText || "Running intent + plan + evidence retrieval...";
+          const requestPayload = existingPayload || {
             tenant_id: tenantId,
             question,
+            filter_overrides: {},
             seed_limit: Number(el("resultLimit").value || 25),
             hops: Number(el("hops").value || 2),
             max_nodes: Number(el("maxNodes").value || 500),
             max_edges: Number(el("maxEdges").value || 2000),
             include_graph: true,
-          });
+          };
+          lastQuestionPayload = requestPayload;
+          const payload = await callJson("/api/entity-search/exposure-question", "POST", requestPayload);
           renderQuestionAnalysis(payload || {});
           if (payload && payload.graph_payload && payload.graph_payload.elements) {
             renderGraph(payload.graph_payload, { collapse: false });
             clearDetails();
           }
-          el("qaStatus").textContent = `Analysis complete (${payload.mode || "deterministic"}).`;
-          msg("Grounded exposure analysis updated.");
+          if (payload && payload.status === "needs_clarification") {
+            el("qaStatus").textContent = "Clarification needed.";
+            msg("Choose a clarification to continue.");
+          } else {
+            el("qaStatus").textContent = `Analysis complete (${payload.mode || "deterministic"}).`;
+            msg("Grounded exposure analysis updated.");
+          }
         } catch (e) {
           el("qaStatus").textContent = `Analysis failed: ${e.message}`;
           msg(`Analysis failed: ${e.message}`, true);

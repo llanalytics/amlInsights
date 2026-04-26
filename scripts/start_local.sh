@@ -49,4 +49,22 @@ Starting amlInsights locally with DATABASE_URL override:
 MSG
 
 cd "$PROJECT_ROOT"
-exec uvicorn main:app --host 127.0.0.1 --port "$PORT" --reload
+if [ -x "$PROJECT_ROOT/.venv/bin/uvicorn" ]; then
+  exec "$PROJECT_ROOT/.venv/bin/uvicorn" main:app --host 127.0.0.1 --port "$PORT" --reload
+fi
+
+if command -v uvicorn >/dev/null 2>&1; then
+  exec uvicorn main:app --host 127.0.0.1 --port "$PORT" --reload
+fi
+
+cat <<MSG
+uvicorn was not found.
+
+Recreate/install the local virtualenv, then rerun this script:
+  cd "$PROJECT_ROOT"
+  /opt/homebrew/bin/python3.13 -m venv .venv
+  source .venv/bin/activate
+  pip install --upgrade pip setuptools wheel
+  pip install -r requirements.txt
+MSG
+exit 1

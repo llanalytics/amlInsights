@@ -317,3 +317,116 @@ Repo: `/home/ehale/Documents/amlInsightsDataHub`
   - Increase or tune transaction-node enrichment limit (currently capped) only if needed.
   - Refine ranking so customer and primary-account contexts dominate initial view for customer-centric questions.
   - Add explicit evidence-citation IDs for enriched transaction paths (edge/node references) in analyst output.
+
+### 2026-04-26 - MacBook Local Reset + Conversational Exposure Search Checkpoint
+
+- New local workspace paths on MacBook Air:
+  - `/Users/erichale/Library/Mobile Documents/com~apple~CloudDocs/apps/amlInsights`
+  - `/Users/erichale/Library/Mobile Documents/com~apple~CloudDocs/apps/amlredflags`
+  - `/Users/erichale/Library/Mobile Documents/com~apple~CloudDocs/apps/amlInsightsDataHub`
+- Local environment notes:
+  - Copied `.venv` folders were stale/broken from old machine paths and should be recreated with Python 3.13.
+  - Use app-local venv dependencies, not Homebrew, for Python packages such as `uvicorn`.
+  - `amlInsights/.env` and `amlredflags/.env` local DB URLs were updated/quoted because the Mac path contains `Mobile Documents`:
+    - `LOCAL_DATABASE_URL="sqlite:////Users/erichale/Library/Mobile Documents/com~apple~CloudDocs/apps/amlInsights/app.db"`
+  - `amlInsightsDataHub/.env` can keep relative local paths:
+    - `DATA_HUB_DATABASE_URL=sqlite:///./data_hub.db`
+    - `LOCAL_DATA_HUB_DATABASE_URL=sqlite:///./data_hub.db`
+  - Startup/migration scripts were hardened to prefer repo-local `.venv/bin` tools and to handle quoted `.env` values:
+    - `amlInsights/scripts/start_local.sh`
+    - `amlInsights/scripts/migrate_db.sh`
+    - `amlredflags/scripts/start_server.sh`
+    - `amlredflags/scripts/migrate_db.sh`
+    - `amlInsightsDataHub/scripts/start_server.sh`
+    - `amlInsightsDataHub/scripts/db_migrate.sh`
+
+- Data Hub graph/exposure fixes:
+  - `amlInsightsDataHub/app/graph_layer.py`
+  - Exposure seed search now extracts likely entity phrases from analyst questions, so:
+    - `I'm looking for negative news on ARIGATO LIMITED and any payments to counterparties outside the US`
+    - correctly seeds `Customer:CUST-010 / ARIGATO LIMITED` instead of unrelated Panama nodes that matched generic words.
+  - Graph nodes now include `business_key`, which lets transaction detail lookup recover account/counterparty keys from graph node IDs.
+  - Surrogate address creation now suppresses country-code-only address signatures to reduce noisy country-only clusters.
+  - Shared surrogate nodes are added back into selected subgraphs when two or more selected real nodes share them, so duplicate counterparty names in the returned graph now link through shared `SurrogateName` nodes.
+
+- Data Hub transaction/dimension filters added:
+  - `GET /api/graph/exposure/transactions` now supports dimension-aware filters:
+    - `outside_counterparty_jurisdiction`
+    - `counterparty_jurisdiction`
+    - `outside_customer_country_code`
+    - `customer_country_code`
+    - `outside_branch_country_code`
+    - `branch_country_code`
+    - `account_type_contains`
+    - `account_name_contains`
+    - `customer_segment_contains`
+    - `customer_business_unit`
+    - `branch_type_contains`
+  - `GET /api/graph/transaction-filter-catalog` now includes live dimension vocabularies:
+    - `counterparty_jurisdictions`
+    - `customer_country_codes`
+    - `branch_country_codes`
+  - Account geography is not currently supported because the current account dimension sample only has:
+    - `account_key`, `account_type`, `account_name`
+    - Add account country/location attributes before supporting account-country filters.
+
+- `amlInsights` exposure parser/assistant changes:
+  - `amlInsights/main.py`
+  - Natural language filter mapping now distinguishes:
+    - `payments outside the US` -> transaction country filter (`outside_country_code_2=US`)
+    - `payments to counterparties outside the US` -> counterparty jurisdiction filter (`outside_counterparty_jurisdiction=US`)
+    - customer/branch outside-US wording -> corresponding customer/branch filters
+  - The OpenAI filter mapper is still useful, but ambiguous `outside the US` questions now pause for clarification instead of letting OpenAI silently choose a dimension.
+  - `ExposureQuestionRequest` now accepts `filter_overrides` so the UI can rerun with a structured clarification choice.
+  - `POST /api/entity-search/exposure-question` now returns:
+    - `interpreted_query`
+    - `clarification` when needed
+    - `mode/status = needs_clarification` for ambiguous geography scope
+
+- Exposure UI changes:
+  - `amlInsights/templates/exposure_search.html`
+  - Added visible `Interpreted Query` section.
+  - Added clarification buttons when the backend returns `needs_clarification`.
+  - Clicking a clarification button reruns the same question with structured `filter_overrides`.
+  - Example ambiguous question expected to show buttons:
+    - `Show exposure for ARIGATO LIMITED outside the US`
+  - Expected clarification choices:
+    - Counterparty jurisdiction
+    - Transaction country
+    - Customer country
+    - Branch country
+
+- Verification completed:
+  - Direct Data Hub test for `Customer:CUST-010` with:
+    - `outside_counterparty_jurisdiction=US`
+    - `direction=Outbound`
+    - `mechanism_contains=Wire`
+  - Returned non-US counterparty jurisdictions only; no rows had `counterparty_jurisdiction = US`.
+  - Parser check for:
+    - `I'm looking for negative news on ARIGATO LIMITED and any payments to counterparties outside the US`
+  - Expected interpreted query:
+    - subject `ARIGATO LIMITED`
+    - `transaction.direction equals Outbound`
+    - `transaction.mechanism contains Wire`
+    - `counterparty.jurisdiction outside US`
+
+- First thing to test next session:
+  1. Restart `amlInsights` and `amlInsightsDataHub`.
+  2. Hard refresh the browser.
+  3. Run:
+     - `Show exposure for ARIGATO LIMITED outside the US`
+  4. Confirm UI shows clarification buttons under `Interpreted Query`.
+  5. Click `Counterparty jurisdiction`.
+  6. Confirm rerun interpretation says:
+     - `counterparty.jurisdiction outside US`
+  7. Confirm transaction evidence excludes US-jurisdiction counterparties.
+
+- Next recommended development step:
+  - After the clarification loop feels right, add persisted investigation sessions:
+    - `exposure_sessions`
+    - `exposure_session_messages`
+    - `exposure_session_interpretations`
+  - Then support follow-up messages like:
+    - `Now only show wires`
+    - `Switch outside US to transaction country instead`
+    - `Limit to Panama-linked counterparties`

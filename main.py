@@ -223,6 +223,7 @@ class CatalogAssistantChatRequest(BaseModel):
 class ExposureQuestionRequest(BaseModel):
     tenant_id: int = Field(ge=1)
     question: str = Field(min_length=1, max_length=4000)
+    filter_overrides: dict[str, object] = Field(default_factory=dict)
     seed_limit: int = Field(default=8, ge=1, le=25)
     hops: int = Field(default=2, ge=1, le=5)
     max_nodes: int = Field(default=500, ge=10, le=2000)
@@ -821,8 +822,28 @@ def _merge_unique_strings(values: list[str]) -> list[str]:
 
 
 _TX_DIRECTION_SYNONYMS: dict[str, set[str]] = {
-    "outbound": {"outbound", "outgoing", "sent", "egress", "to counterparty", "payments out"},
-    "inbound": {"inbound", "incoming", "received", "ingress", "from counterparty", "payments in"},
+    "outbound": {
+        "outbound",
+        "outgoing",
+        "sent",
+        "egress",
+        "to counterparty",
+        "to counterparties",
+        "payments to counterparty",
+        "payments to counterparties",
+        "payments out",
+    },
+    "inbound": {
+        "inbound",
+        "incoming",
+        "received",
+        "ingress",
+        "from counterparty",
+        "from counterparties",
+        "payments from counterparty",
+        "payments from counterparties",
+        "payments in",
+    },
 }
 _TX_MECHANISM_SYNONYMS: dict[str, set[str]] = {
     "wire": {"wire", "wires", "payments", "payment", "funds transfer", "transfer", "transfers", "swift", "mt103"},
@@ -875,8 +896,20 @@ def _deterministic_transaction_filter_mapping(
             break
 
     if any(term in q for term in ("outside us", "outside the us", "non-us", "non us", "outside united states")):
-        mapped["outside_country_code_2"] = "US"
-        reasons.append("Detected outside-US geography phrase.")
+        if any(term in q for term in ("counterparty", "counterparties", "beneficiary", "beneficiaries", "recipient", "recipients")):
+            mapped["outside_counterparty_jurisdiction"] = "US"
+            reasons.append("Detected outside-US counterparty geography phrase.")
+        elif any(term in q for term in ("customer", "customers", "client", "clients")):
+            mapped["outside_customer_country_code"] = "US"
+            reasons.append("Detected outside-US customer geography phrase.")
+        elif any(term in q for term in ("branch", "branches")):
+            mapped["outside_branch_country_code"] = "US"
+            reasons.append("Detected outside-US branch geography phrase.")
+        elif any(term in q for term in ("transaction", "transactions", "payment", "payments", "activity", "transfer", "transfers")):
+            mapped["outside_country_code_2"] = "US"
+            reasons.append("Detected outside-US transaction geography phrase.")
+        else:
+            reasons.append("Detected outside-US phrase without a clear filter dimension.")
         confidence += 0.25
 
     if any(term in q for term in ("wire", "wires", "payments", "payment")) and "mechanism_contains" not in mapped:
@@ -904,6 +937,9 @@ def _openai_map_transaction_filters(
             "mechanisms": _catalog_list_values(catalog, "mechanisms"),
             "aml_classifications": _catalog_list_values(catalog, "aml_classifications"),
             "country_codes_2": _catalog_list_values(catalog, "country_codes_2"),
+            "counterparty_jurisdictions": _catalog_list_values(catalog, "counterparty_jurisdictions"),
+            "customer_country_codes": _catalog_list_values(catalog, "customer_country_codes"),
+            "branch_country_codes": _catalog_list_values(catalog, "branch_country_codes"),
         },
         "deterministic_candidate": deterministic_mapped,
         "deterministic_reasons": deterministic_reasons,
@@ -912,7 +948,12 @@ def _openai_map_transaction_filters(
         "You map AML analyst language to structured transaction filters. "
         "Use only allowed values. "
         "Return strict JSON with keys: filters (object), confidence (number 0..1), rationale (string). "
-        "filters may include direction, mechanism_contains, aml_classification_contains, outside_country_code_2."
+        "filters may include direction, mechanism_contains, aml_classification_contains, outside_country_code_2, "
+        "outside_counterparty_jurisdiction, counterparty_jurisdiction, outside_customer_country_code, "
+        "customer_country_code, outside_branch_country_code, branch_country_code, account_type_contains, "
+        "account_name_contains, customer_segment_contains, customer_business_unit, branch_type_contains. "
+        "Map phrases like 'counterparties outside the US' to outside_counterparty_jurisdiction, "
+        "not outside_country_code_2."
     )
     req_body = {
         "model": OPENAI_MODEL,
@@ -975,7 +1016,191 @@ def _validate_transaction_filter_mapping(filters: dict[str, object], catalog: di
         resolved_cc = cc_map.get(outside_cc)
         if resolved_cc:
             valid["outside_country_code_2"] = resolved_cc
+
+    for source_key, catalog_key in (
+        ("outside_counterparty_jurisdiction", "counterparty_jurisdictions"),
+        ("counterparty_jurisdiction", "counterparty_jurisdictions"),
+        ("outside_customer_country_code", "customer_country_codes"),
+        ("customer_country_code", "customer_country_codes"),
+        ("outside_branch_country_code", "branch_country_codes"),
+        ("branch_country_code", "branch_country_codes"),
+    ):
+        raw = str(filters.get(source_key) or "").strip().upper()
+        if not raw:
+            continue
+        allowed = {v.upper(): v.upper() for v in _catalog_list_values(catalog, catalog_key)}
+        resolved = allowed.get(raw)
+        if resolved:
+            valid[source_key] = resolved
+
+    for text_key in (
+        "account_type_contains",
+        "account_name_contains",
+        "customer_segment_contains",
+        "customer_business_unit",
+        "branch_type_contains",
+    ):
+        raw = str(filters.get(text_key) or "").strip()
+        if raw:
+            valid[text_key] = raw
     return valid
+
+
+def _outside_us_phrase_present(question: str) -> bool:
+    q = str(question or "").lower()
+    return any(term in q for term in ("outside us", "outside the us", "non-us", "non us", "outside united states"))
+
+
+def _outside_us_dimension_hints(question: str) -> list[str]:
+    q = str(question or "").lower()
+    dimension_words = {
+        "transaction": ("transaction", "transactions", "payment", "payments", "activity", "transfer", "transfers"),
+        "counterparty": ("counterparty", "counterparties", "beneficiary", "beneficiaries", "recipient", "recipients"),
+        "customer": ("customer", "customers", "client", "clients"),
+        "branch": ("branch", "branches"),
+    }
+    return [
+        dimension
+        for dimension, words in dimension_words.items()
+        if any(word in q for word in words)
+    ]
+
+
+def _outside_us_clarification(question: str, applied_filters: dict[str, object]) -> dict[str, object] | None:
+    if not _outside_us_phrase_present(question):
+        return None
+    matched_dimensions = _outside_us_dimension_hints(question)
+    dimension_filter_keys = {
+        "outside_country_code_2",
+        "outside_counterparty_jurisdiction",
+        "outside_customer_country_code",
+        "outside_branch_country_code",
+    }
+    applied_dimension_filters = [
+        key
+        for key in dimension_filter_keys
+        if applied_filters.get(key)
+    ]
+    if len(matched_dimensions) == 1 and len(applied_dimension_filters) == 1:
+        return None
+    if len(matched_dimensions) > 1 and len(applied_dimension_filters) == 1:
+        return None
+    if applied_dimension_filters:
+        return None
+    return {
+        "status": "needs_clarification",
+        "question": "When you say outside the US, which dimension should the filter apply to?",
+        "reason": "The phrase outside the US can refer to transaction country, counterparty jurisdiction, customer country, or branch country.",
+        "choices": [
+            {
+                "label": "Counterparty jurisdiction",
+                "filters": {"outside_counterparty_jurisdiction": "US"},
+                "description": "Return payments where the counterparty jurisdiction is not US.",
+            },
+            {
+                "label": "Transaction country",
+                "filters": {"outside_country_code_2": "US"},
+                "description": "Return payments where the transaction country code is not US.",
+            },
+            {
+                "label": "Customer country",
+                "filters": {"outside_customer_country_code": "US"},
+                "description": "Return payments linked to customers whose country is not US.",
+            },
+            {
+                "label": "Branch country",
+                "filters": {"outside_branch_country_code": "US"},
+                "description": "Return payments linked to branches whose country is not US.",
+            },
+        ],
+    }
+
+
+_FILTER_INTERPRETATION_LABELS: dict[str, tuple[str, str, str]] = {
+    "direction": ("transaction", "direction", "equals"),
+    "mechanism_contains": ("transaction", "mechanism", "contains"),
+    "aml_classification_contains": ("transaction", "aml_classification", "contains"),
+    "outside_country_code_2": ("transaction", "country_code_2", "outside"),
+    "outside_counterparty_jurisdiction": ("counterparty", "jurisdiction", "outside"),
+    "counterparty_jurisdiction": ("counterparty", "jurisdiction", "equals"),
+    "outside_customer_country_code": ("customer", "country_code", "outside"),
+    "customer_country_code": ("customer", "country_code", "equals"),
+    "outside_branch_country_code": ("branch", "country_code", "outside"),
+    "branch_country_code": ("branch", "country_code", "equals"),
+    "account_type_contains": ("account", "account_type", "contains"),
+    "account_name_contains": ("account", "account_name", "contains"),
+    "customer_segment_contains": ("customer", "segment", "contains"),
+    "customer_business_unit": ("customer", "business_unit", "equals"),
+    "branch_type_contains": ("branch", "branch_type", "contains"),
+}
+
+
+def _interpreted_filters_from_applied(applied_filters: dict[str, object] | None) -> list[dict[str, object]]:
+    out: list[dict[str, object]] = []
+    if not isinstance(applied_filters, dict):
+        return out
+    for key, value in applied_filters.items():
+        if value is None or value == "":
+            continue
+        label = _FILTER_INTERPRETATION_LABELS.get(str(key))
+        if not label:
+            continue
+        dimension, field, operator = label
+        out.append(
+            {
+                "source_parameter": str(key),
+                "dimension": dimension,
+                "field": field,
+                "operator": operator,
+                "value": value,
+            }
+        )
+    return out
+
+
+def _build_interpreted_query(
+    *,
+    question: str,
+    selected_intents: list[dict[str, object]],
+    seed_candidates: list[dict[str, object]],
+    tx_mapping_info: dict[str, object] | None,
+    clarification: dict[str, object] | None = None,
+) -> dict[str, object]:
+    primary_seed = seed_candidates[0] if seed_candidates else {}
+    applied_filters = (
+        tx_mapping_info.get("applied_filters")
+        if isinstance(tx_mapping_info, dict) and isinstance(tx_mapping_info.get("applied_filters"), dict)
+        else {}
+    )
+    filters = _interpreted_filters_from_applied(applied_filters)
+    subject = {
+        "node_id": str(primary_seed.get("node_id") or ""),
+        "node_type": str(primary_seed.get("node_type") or ""),
+        "business_key": str(primary_seed.get("business_key") or ""),
+        "label": str(primary_seed.get("label") or ""),
+    }
+    parts: list[str] = []
+    if subject.get("label"):
+        parts.append(f"subject `{subject['label']}`")
+    if filters:
+        parts.append(
+            "filters "
+            + ", ".join(
+                f"{f['dimension']}.{f['field']} {f['operator']} {f['value']}"
+                for f in filters
+            )
+        )
+    natural_language = "Interpreted as " + "; ".join(parts) + "." if parts else "No executable interpretation was produced."
+    return {
+        "status": "needs_clarification" if clarification else "ready_to_run",
+        "question": question,
+        "subject": subject,
+        "intents": [str(row.get("intent") or "") for row in selected_intents],
+        "filters": filters,
+        "filter_mapping": tx_mapping_info or {},
+        "natural_language": natural_language,
+        "clarification": clarification,
+    }
 
 
 def _normalize_transaction_filters_for_question(
@@ -983,6 +1208,7 @@ def _normalize_transaction_filters_for_question(
     connection: TenantDataHubConnection,
     question: str,
     base_params: dict[str, object],
+    filter_overrides: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     catalog = _proxy_data_hub_json(connection, "/api/graph/transaction-filter-catalog", {})
     deterministic_filters, deterministic_confidence, deterministic_reasons = _deterministic_transaction_filter_mapping(
@@ -990,12 +1216,38 @@ def _normalize_transaction_filters_for_question(
         catalog,
     )
     normalized = dict(base_params)
-    normalized.update(_validate_transaction_filter_mapping(deterministic_filters, catalog))
+    deterministic_valid = _validate_transaction_filter_mapping(deterministic_filters, catalog)
+    has_filter_overrides = isinstance(filter_overrides, dict) and bool(filter_overrides)
+    ambiguous_outside_us = (
+        _outside_us_phrase_present(question)
+        and not _outside_us_dimension_hints(question)
+        and not has_filter_overrides
+    )
+    if ambiguous_outside_us:
+        normalized.pop("outside_country_code_2", None)
+    normalized.update(deterministic_valid)
+    if "outside_counterparty_jurisdiction" in deterministic_valid and "outside_country_code_2" in normalized:
+        normalized.pop("outside_country_code_2", None)
+    if "outside_customer_country_code" in deterministic_valid and "outside_country_code_2" in normalized:
+        normalized.pop("outside_country_code_2", None)
+    if "outside_branch_country_code" in deterministic_valid and "outside_country_code_2" in normalized:
+        normalized.pop("outside_country_code_2", None)
+    override_filters = _validate_transaction_filter_mapping(
+        filter_overrides if isinstance(filter_overrides, dict) else {},
+        catalog,
+    )
+    if override_filters:
+        normalized.update(override_filters)
+        if any(
+            key in override_filters
+            for key in ("outside_counterparty_jurisdiction", "outside_customer_country_code", "outside_branch_country_code")
+        ):
+            normalized.pop("outside_country_code_2", None)
     mode = "deterministic"
     confidence = deterministic_confidence
     rationale = "; ".join(deterministic_reasons)
 
-    if confidence < EXPOSURE_FILTER_MAPPER_CONFIDENCE_THRESHOLD:
+    if confidence < EXPOSURE_FILTER_MAPPER_CONFIDENCE_THRESHOLD and not ambiguous_outside_us:
         llm = _openai_map_transaction_filters(
             question=question,
             catalog=catalog,
@@ -1009,6 +1261,12 @@ def _normalize_transaction_filters_for_question(
             )
             if llm_filters:
                 normalized.update(llm_filters)
+                if "outside_counterparty_jurisdiction" in llm_filters and "outside_country_code_2" in normalized:
+                    normalized.pop("outside_country_code_2", None)
+                if "outside_customer_country_code" in llm_filters and "outside_country_code_2" in normalized:
+                    normalized.pop("outside_country_code_2", None)
+                if "outside_branch_country_code" in llm_filters and "outside_country_code_2" in normalized:
+                    normalized.pop("outside_country_code_2", None)
                 mode = "openai_mapper"
                 confidence = max(confidence, float(llm.get("confidence") or 0.0))
                 rationale = str(llm.get("rationale") or rationale)
@@ -1018,7 +1276,27 @@ def _normalize_transaction_filters_for_question(
         "confidence": max(0.0, min(1.0, confidence)),
         "rationale": rationale,
         "deterministic_filters": deterministic_filters,
-        "applied_filters": {k: normalized.get(k) for k in ("direction", "mechanism_contains", "aml_classification_contains", "outside_country_code_2")},
+        "override_filters": override_filters,
+        "applied_filters": {
+            k: normalized.get(k)
+            for k in (
+                "direction",
+                "mechanism_contains",
+                "aml_classification_contains",
+                "outside_country_code_2",
+                "outside_counterparty_jurisdiction",
+                "counterparty_jurisdiction",
+                "outside_customer_country_code",
+                "customer_country_code",
+                "outside_branch_country_code",
+                "branch_country_code",
+                "account_type_contains",
+                "account_name_contains",
+                "customer_segment_contains",
+                "customer_business_unit",
+                "branch_type_contains",
+            )
+        },
     }
     return normalized, mapping_info
 
@@ -7450,12 +7728,31 @@ def entity_search_exposure_question(
         tx_params_template_raw = tx_step.get("params")
         tx_params_template = tx_params_template_raw if isinstance(tx_params_template_raw, dict) else {}
         tx_mapping_info: dict[str, object] | None = None
+        interpreted_query: dict[str, object] | None = None
         transaction_linked_node_ids: set[str] = set()
         if tx_endpoint:
             normalized_tx_params_base, tx_mapping_info = _normalize_transaction_filters_for_question(
                 connection=connection,
                 question=question,
                 base_params=tx_params_template,
+                filter_overrides=payload.filter_overrides,
+            )
+            applied_filters_for_clarification = (
+                tx_mapping_info.get("applied_filters")
+                if isinstance(tx_mapping_info, dict) and isinstance(tx_mapping_info.get("applied_filters"), dict)
+                else {}
+            )
+            clarification = (
+                None
+                if isinstance(payload.filter_overrides, dict) and payload.filter_overrides
+                else _outside_us_clarification(question, applied_filters_for_clarification)
+            )
+            interpreted_query = _build_interpreted_query(
+                question=question,
+                selected_intents=selected_intent_rows,
+                seed_candidates=ordered_seeds,
+                tx_mapping_info=tx_mapping_info,
+                clarification=clarification,
             )
             queried_data.append(
                 {
@@ -7464,6 +7761,47 @@ def entity_search_exposure_question(
                     "mapping": tx_mapping_info,
                 }
             )
+            if clarification:
+                return {
+                    "question": question,
+                    "intent": intent,
+                    "intent_description": intent_description,
+                    "intents": [str(row.get("intent") or "") for row in selected_intent_rows],
+                    "intent_routing": query_plan.get("intent_routing"),
+                    "structured_query_plan": query_plan,
+                    "queried_data": queried_data,
+                    "mode": "needs_clarification",
+                    "status": "needs_clarification",
+                    "summary": str(clarification.get("question") or ""),
+                    "relevance_explanation": [str(clarification.get("reason") or "")],
+                    "relationship_findings": {
+                        "aggregate_node_type_counts": aggregate_node_type_counts,
+                        "aggregate_edge_type_counts": aggregate_edge_type_counts,
+                    },
+                    "evidence": evidence,
+                    "graph_payload": selected_graph_payload if bool(payload.include_graph) else None,
+                    "graph_seed_node_id": selected_graph_seed_node_id,
+                    "transaction_evidence": [],
+                    "transaction_filter_mapping": tx_mapping_info,
+                    "interpreted_query": interpreted_query,
+                    "clarification": clarification,
+                    "enriched_transaction_nodes": [],
+                    "seed_selection": {
+                        "graph_seed_candidates": [str(row.get("node_id") or "") for row in graph_seed_candidates[:10]],
+                        "transaction_seed_candidates": [str(row.get("node_id") or "") for row in tx_seed_candidates[:10]],
+                    },
+                    "assumptions": [
+                        "Execution paused because the geographic filter is ambiguous.",
+                    ],
+                    "limitations": [
+                        "Choose a dimension for the outside-US filter and rerun the question with that clarification.",
+                    ],
+                    "audit_trail": {
+                        "module_code": "entity_search",
+                        "action": "exposure_question_needs_clarification",
+                        "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
             for seed in tx_seed_candidates[:4]:
                 node_id = str(seed.get("node_id") or "").strip()
                 if not node_id:
@@ -7500,6 +7838,14 @@ def entity_search_exposure_question(
                         "filter_mapping": tx_mapping_info,
                     }
                 )
+
+        if interpreted_query is None:
+            interpreted_query = _build_interpreted_query(
+                question=question,
+                selected_intents=selected_intent_rows,
+                seed_candidates=ordered_seeds,
+                tx_mapping_info=tx_mapping_info,
+            )
 
         enriched_transaction_nodes: list[str] = []
         if bool(payload.include_graph) and selected_graph_payload and transaction_linked_node_ids:
@@ -7617,6 +7963,7 @@ def entity_search_exposure_question(
             "intent_library_version": str(_EXPOSURE_INTENTS_LIBRARY.get("library_version") or ""),
             "intent_routing": query_plan.get("intent_routing"),
             "transaction_filter_mapping": tx_mapping_info,
+            "interpreted_query": interpreted_query,
             "enriched_transaction_nodes": enriched_transaction_nodes,
             "seed_selection": {
                 "graph_seed_candidates": [str(row.get("node_id") or "") for row in graph_seed_candidates[:10]],
@@ -7658,6 +8005,7 @@ def entity_search_exposure_question(
             "graph_seed_node_id": selected_graph_seed_node_id,
             "transaction_evidence": transaction_evidence,
             "transaction_filter_mapping": tx_mapping_info,
+            "interpreted_query": interpreted_query,
             "enriched_transaction_nodes": enriched_transaction_nodes,
             "seed_selection": {
                 "graph_seed_candidates": [str(row.get("node_id") or "") for row in graph_seed_candidates[:10]],
@@ -7727,6 +8075,17 @@ def entity_search_exposure_transactions(
     hops: int = Query(default=2, ge=1, le=5),
     limit: int = Query(default=500, ge=1, le=10000),
     outside_country_code_2: str | None = Query(default=None),
+    outside_counterparty_jurisdiction: str | None = Query(default=None),
+    counterparty_jurisdiction: str | None = Query(default=None),
+    outside_customer_country_code: str | None = Query(default=None),
+    customer_country_code: str | None = Query(default=None),
+    outside_branch_country_code: str | None = Query(default=None),
+    branch_country_code: str | None = Query(default=None),
+    account_type_contains: str | None = Query(default=None),
+    account_name_contains: str | None = Query(default=None),
+    customer_segment_contains: str | None = Query(default=None),
+    customer_business_unit: str | None = Query(default=None),
+    branch_type_contains: str | None = Query(default=None),
     direction: str | None = Query(default=None),
     aml_classification_contains: str | None = Query(default=None),
     mechanism_contains: str | None = Query(default=None),
@@ -7756,6 +8115,17 @@ def entity_search_exposure_transactions(
                 "hops": hops,
                 "limit": limit,
                 "outside_country_code_2": (outside_country_code_2 or "").strip() or None,
+                "outside_counterparty_jurisdiction": (outside_counterparty_jurisdiction or "").strip() or None,
+                "counterparty_jurisdiction": (counterparty_jurisdiction or "").strip() or None,
+                "outside_customer_country_code": (outside_customer_country_code or "").strip() or None,
+                "customer_country_code": (customer_country_code or "").strip() or None,
+                "outside_branch_country_code": (outside_branch_country_code or "").strip() or None,
+                "branch_country_code": (branch_country_code or "").strip() or None,
+                "account_type_contains": (account_type_contains or "").strip() or None,
+                "account_name_contains": (account_name_contains or "").strip() or None,
+                "customer_segment_contains": (customer_segment_contains or "").strip() or None,
+                "customer_business_unit": (customer_business_unit or "").strip() or None,
+                "branch_type_contains": (branch_type_contains or "").strip() or None,
                 "direction": (direction or "").strip() or None,
                 "aml_classification_contains": (aml_classification_contains or "").strip() or None,
                 "mechanism_contains": (mechanism_contains or "").strip() or None,
