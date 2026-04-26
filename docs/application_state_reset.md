@@ -292,3 +292,28 @@ Repo: `/home/ehale/Documents/amlInsightsDataHub`
   - `seed_selection.graph_seed_candidates`
   - `seed_selection.transaction_seed_candidates`
 - Goal: ensure transactional expansion contributes visible account/counterparty nodes and associated negative-news overlays in the same graph run.
+
+### 2026-04-24 - Next Session Start Point (Fine-Tuning Plan)
+
+- Current status:
+  - Exposure flow is improved and graph behavior is \"looking better\", but additional tuning is desired.
+- First test to run on return:
+  - Question:
+    - `Show potential negative news on ARIGATO LIMITED and all payments associated with this customer to counterparties outside the US`
+- Validate in this order:
+  1. `seed_selection.graph_seed_candidates` contains customer/account/counterparty-first ordering.
+  2. `transaction_filter_mapping.applied_filters` maps payment language to wire-compatible filters (especially `mechanism_contains`).
+  3. `transaction_evidence.row_count` is non-zero for at least one seed.
+  4. `enriched_transaction_nodes` is populated.
+  5. Returned `graph_payload.elements.nodes` includes at least some `Account:*` / `CounterpartyAccount:*` nodes from transaction evidence.
+  6. Graph UI visually shows those transaction-linked nodes after `Analyze Question`.
+- If mismatch remains, next debugging step:
+  - Add temporary on-screen debug panel in Exposure UI showing:
+    - `seed_selection`
+    - `enriched_transaction_nodes`
+    - `transaction_filter_mapping`
+    - count of account/counterparty nodes present in returned `graph_payload`
+- Tuning backlog after baseline pass:
+  - Increase or tune transaction-node enrichment limit (currently capped) only if needed.
+  - Refine ranking so customer and primary-account contexts dominate initial view for customer-centric questions.
+  - Add explicit evidence-citation IDs for enriched transaction paths (edge/node references) in analyst output.
