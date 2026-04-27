@@ -23,6 +23,16 @@
       button.secondary { background:#5f7489; }
       .msg { min-height:1.2rem; color:#1f5f8b; margin-top: 0.5rem; }
       .subtle { color:#4d6478; font-size:0.9rem; }
+      .session-tools { display:grid; grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.2fr); gap:0.7rem; margin-top:0.7rem; }
+      .session-box { border:1px solid #d8e1e9; border-radius:8px; background:#fbfdff; padding:0.6rem; min-height:180px; max-height:320px; overflow:auto; }
+      .session-row { display:grid; grid-template-columns: 1fr auto; gap:0.4rem; align-items:center; padding:0.45rem 0; border-bottom:1px solid #e5ecf2; }
+      .session-row:last-child { border-bottom:none; }
+      .session-turn { padding:0.55rem 0; border-bottom:1px solid #e5ecf2; }
+      .session-turn:last-child { border-bottom:none; }
+      .session-actions { display:flex; gap:0.35rem; flex-wrap:wrap; margin-top:0.35rem; }
+      .compact-btn { width:auto; padding:0.35rem 0.55rem; border-radius:6px; font-size:0.84rem; }
+      .txn-table-wrap { overflow:auto; max-height:520px; border:1px solid #d8e1e9; border-radius:8px; }
+      .txn-table-wrap table { min-width:1180px; }
       table { width:100%; border-collapse: collapse; }
       th, td { text-align:left; padding:0.45rem; border-bottom:1px solid #d8e1e9; vertical-align: top; font-size:0.93rem; }
       pre { background:#f4f8fc; border:1px solid #d8e1e9; border-radius:8px; padding:0.6rem; overflow:auto; font-size:0.82rem; }
@@ -32,6 +42,7 @@
       .graph-side { min-width: 0; border: 1px solid #d8e1e9; border-radius: 10px; padding: 0.7rem; background: #fbfdff; height: calc(74vh + 46px); min-height: 666px; overflow: auto; }
       @media (max-width: 900px) {
         .grid { grid-template-columns: 1fr; }
+        .session-tools { grid-template-columns: 1fr; }
         .graph-layout { grid-template-columns: 1fr; }
         .graph-side { height: auto; min-height: 280px; }
         #graph { height: 520px; min-height: 520px; }
@@ -53,6 +64,40 @@
           <label>Question
             <textarea id="questionInput" placeholder="Example: Show potential sanctions and offshore exposure around ARIGATO and explain why it is relevant."></textarea>
           </label>
+          <div class="grid" style="margin-top:0.7rem;">
+            <label>Result Limit
+              <input id="resultLimit" type="number" min="1" max="200" value="25">
+            </label>
+            <label>Graph Hops
+              <input id="hops" type="number" min="1" max="5" value="2">
+            </label>
+            <label>Max Nodes
+              <input id="maxNodes" type="number" min="10" max="2000" value="500">
+            </label>
+            <label>Max Edges
+              <input id="maxEdges" type="number" min="10" max="5000" value="2000">
+            </label>
+          </div>
+          <div style="margin-top:0.7rem; display:grid; grid-template-columns: 1fr auto; gap:0.6rem; align-items:end;">
+            <div>
+              <strong>Investigation Session</strong>
+              <div id="qaSessionStatus" class="subtle">No active session.</div>
+            </div>
+            <div style="display:flex; gap:0.45rem; flex-wrap:wrap; justify-content:flex-end;">
+              <button class="secondary" style="width:auto; min-width:140px;" onclick="loadExposureSessions()">Refresh Sessions</button>
+              <button class="secondary" style="width:auto; min-width:120px;" onclick="startNewExposureSession()">New Session</button>
+            </div>
+          </div>
+          <div class="session-tools">
+            <div>
+              <strong>Recent Sessions</strong>
+              <div id="qaSessionList" class="session-box subtle">No sessions loaded.</div>
+            </div>
+            <div>
+              <strong>Active Transcript</strong>
+              <div id="qaSessionTranscript" class="session-box subtle">No active session.</div>
+            </div>
+          </div>
           <div style="margin-top:0.7rem; display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem;">
             <button onclick="analyzeQuestion()">Analyze Question</button>
             <button class="secondary" onclick="clearQuestionAnalysis()">Clear Analysis</button>
@@ -110,50 +155,74 @@
       </details>
 
       <details class="panel" open>
-        <summary class="accordion-title">Exposure Search</summary>
+        <summary class="accordion-title">Transactions</summary>
         <div class="accordion-body">
           <p class="subtle" id="tenantResolvedLabel"></p>
-          <div class="grid">
-            <label>Name Search
-              <input id="searchText" placeholder="Type a name">
-            </label>
-            <label>Result Limit
-              <input id="resultLimit" type="number" min="1" max="200" value="25">
-            </label>
-            <label>Graph Hops
-              <input id="hops" type="number" min="1" max="5" value="2">
-            </label>
-            <label>Max Nodes
-              <input id="maxNodes" type="number" min="10" max="2000" value="500">
-            </label>
-            <label>Max Edges
-              <input id="maxEdges" type="number" min="10" max="5000" value="2000">
-            </label>
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+            <div class="subtle" id="txnTableHint">Transactions identified by assistant analysis will appear here.</div>
+            <button class="secondary" style="width:auto; padding:0.45rem 0.8rem;" onclick="clearExposureTransactionFilters()">Clear Filters</button>
           </div>
-          <div style="margin-top:0.7rem; display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem;">
-            <button onclick="runSearch()">Search Exposure</button>
-            <button class="secondary" onclick="clearGraph()">Clear Graph</button>
+          <div class="txn-table-wrap" style="margin-top:0.5rem;">
+            <table id="txnTable">
+              <thead>
+                <tr>
+                  <th>transaction_date</th>
+                  <th>transaction_key</th>
+                  <th>account_key</th>
+                  <th>aml_classification</th>
+                  <th>direction</th>
+                  <th>amount</th>
+                  <th>country_code_2</th>
+                  <th>currency_code</th>
+                  <th>counterparty_name</th>
+                  <th>counterparty_jurisdiction</th>
+                  <th>source</th>
+                </tr>
+                <tr>
+                  <th>
+                    <input id="txnFilterTransactionDateStart" type="date" placeholder="start date">
+                    <input id="txnFilterTransactionDateEnd" type="date" placeholder="end date">
+                  </th>
+                  <th><input id="txnFilterTransactionKey" placeholder="text"></th>
+                  <th>
+                    <input id="txnFilterAccountKey" placeholder="text">
+                    <select id="txnSelectAccountKey" multiple size="3"></select>
+                  </th>
+                  <th>
+                    <input id="txnFilterAmlClassification" placeholder="text">
+                    <select id="txnSelectAmlClassification" multiple size="3"></select>
+                  </th>
+                  <th>
+                    <input id="txnFilterDirection" placeholder="text">
+                    <select id="txnSelectDirection" multiple size="3"></select>
+                  </th>
+                  <th>
+                    <input id="txnFilterAmount" placeholder="min or min-max">
+                    <select id="txnSelectAmount" multiple size="3"></select>
+                  </th>
+                  <th>
+                    <input id="txnFilterCountryCode2" placeholder="text">
+                    <select id="txnSelectCountryCode2" multiple size="3"></select>
+                  </th>
+                  <th>
+                    <input id="txnFilterCurrencyCode" placeholder="text">
+                    <select id="txnSelectCurrencyCode" multiple size="3"></select>
+                  </th>
+                  <th>
+                    <input id="txnFilterCounterpartyName" placeholder="text">
+                    <select id="txnSelectCounterpartyName" multiple size="3"></select>
+                  </th>
+                  <th>
+                    <input id="txnFilterCounterpartyJurisdiction" placeholder="text">
+                    <select id="txnSelectCounterpartyJurisdiction" multiple size="3"></select>
+                  </th>
+                  <th><input id="txnFilterSource" placeholder="text"></th>
+                </tr>
+              </thead>
+              <tbody id="txnRows"></tbody>
+            </table>
           </div>
           <div id="msg" class="msg"></div>
-        </div>
-      </details>
-
-      <details class="panel" open>
-        <summary class="accordion-title">Search Results</summary>
-        <div class="accordion-body">
-          <table>
-            <thead>
-              <tr>
-                <th>Node Type</th>
-                <th>Label</th>
-                <th>Business Key</th>
-                <th>Matched Fields</th>
-                <th>Score</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="resultsRows"></tbody>
-          </table>
         </div>
       </details>
 
@@ -195,6 +264,10 @@
       let lastFocusedElementSig = "";
       let lastFocusedAtMs = 0;
       let lastQuestionPayload = null;
+      let currentExposureSession = null;
+      let currentExposureSessionDetail = null;
+      let exposureSessions = [];
+      let currentExposureTransactions = [];
       const FOCUS_DEBOUNCE_MS = 60;
 
       function el(id) { return document.getElementById(id); }
@@ -219,6 +292,196 @@
         return data;
       }
       function selectedTenantId() { return Number(DEFAULT_TENANT_ID || 0); }
+      function renderExposureSessionStatus() {
+        const node = el("qaSessionStatus");
+        if (!node) return;
+        if (!currentExposureSession) {
+          node.textContent = "No active session.";
+          return;
+        }
+        node.textContent = `#${currentExposureSession.session_id} - ${currentExposureSession.title || "Exposure investigation"}`;
+      }
+      function sessionTime(value) {
+        if (!value) return "";
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return String(value);
+        return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      }
+      function renderExposureSessionList() {
+        const box = el("qaSessionList");
+        if (!box) return;
+        box.innerHTML = "";
+        if (!exposureSessions.length) {
+          box.textContent = "No sessions yet.";
+          return;
+        }
+        for (const session of exposureSessions) {
+          const row = document.createElement("div");
+          row.className = "session-row";
+          const info = document.createElement("div");
+          const active = currentExposureSession && Number(currentExposureSession.session_id) === Number(session.session_id);
+          info.innerHTML = `<strong>${active ? "* " : ""}${escapeHtml(session.title || "Exposure investigation")}</strong><br><span class="subtle">#${Number(session.session_id || 0)} · ${escapeHtml(session.status || "open")} · ${escapeHtml(sessionTime(session.updated_at))}</span>`;
+          const btn = document.createElement("button");
+          btn.className = "secondary compact-btn";
+          btn.type = "button";
+          btn.textContent = "Load";
+          btn.onclick = () => loadExposureSession(Number(session.session_id || 0));
+          row.appendChild(info);
+          row.appendChild(btn);
+          box.appendChild(row);
+        }
+      }
+      function renderExposureTranscript() {
+        const box = el("qaSessionTranscript");
+        if (!box) return;
+        box.innerHTML = "";
+        if (!currentExposureSessionDetail) {
+          box.textContent = currentExposureSession ? "Loading session transcript..." : "No active session.";
+          return;
+        }
+        const messages = Array.isArray(currentExposureSessionDetail.messages) ? currentExposureSessionDetail.messages : [];
+        const interpretations = Array.isArray(currentExposureSessionDetail.interpretations) ? currentExposureSessionDetail.interpretations : [];
+        const interpretationByMessage = new Map();
+        for (const item of interpretations) {
+          if (item && item.message_id) interpretationByMessage.set(Number(item.message_id), item);
+        }
+        if (!messages.length) {
+          box.textContent = "No turns captured yet.";
+          return;
+        }
+        for (const message of messages) {
+          const turn = document.createElement("div");
+          turn.className = "session-turn";
+          const role = String(message.role || "");
+          const interpretation = interpretationByMessage.get(Number(message.message_id || 0));
+          const meta = [role || "message", sessionTime(message.created_at)].filter(Boolean).join(" · ");
+          const content = String(message.content || "");
+          turn.innerHTML = `<div><strong>${escapeHtml(meta)}</strong></div><div>${escapeHtml(content)}</div>`;
+          if (interpretation) {
+            const interpreted = interpretation.interpreted_query || {};
+            const actions = document.createElement("div");
+            actions.className = "session-actions";
+            const restore = document.createElement("button");
+            restore.className = "secondary compact-btn";
+            restore.type = "button";
+            restore.textContent = "Restore";
+            restore.onclick = () => restoreInterpretation(interpretation);
+            actions.appendChild(restore);
+            const rerun = document.createElement("button");
+            rerun.className = "compact-btn";
+            rerun.type = "button";
+            rerun.textContent = "Rerun";
+            rerun.onclick = () => rerunInterpretation(interpretation);
+            actions.appendChild(rerun);
+            const note = document.createElement("div");
+            note.className = "subtle";
+            note.style.marginTop = "0.25rem";
+            note.textContent = interpreted.natural_language || interpretation.summary || "";
+            turn.appendChild(note);
+            turn.appendChild(actions);
+          }
+          box.appendChild(turn);
+        }
+      }
+      async function loadExposureSessions() {
+        const tenantId = selectedTenantId();
+        if (!tenantId) { msg("Select a tenant.", true); return; }
+        try {
+          const params = new URLSearchParams();
+          params.set("tenant_id", String(tenantId));
+          params.set("limit", "20");
+          const data = await call("/api/entity-search/exposure-sessions?" + params.toString());
+          exposureSessions = Array.isArray(data.sessions) ? data.sessions : [];
+          renderExposureSessionList();
+        } catch (e) {
+          msg(`Session list failed: ${e.message}`, true);
+        }
+      }
+      async function loadExposureSession(sessionId) {
+        const tenantId = selectedTenantId();
+        if (!tenantId || !sessionId) return;
+        try {
+          const data = await call(`/api/entity-search/exposure-sessions/${Number(sessionId)}?tenant_id=${encodeURIComponent(String(tenantId))}`);
+          currentExposureSession = {
+            session_id: data.session_id,
+            tenant_id: data.tenant_id,
+            title: data.title,
+            status: data.status,
+            created_at: data.created_at,
+            updated_at: data.updated_at,
+          };
+          currentExposureSessionDetail = data;
+          renderExposureSessionStatus();
+          renderExposureSessionList();
+          renderExposureTranscript();
+          msg(`Loaded session #${Number(data.session_id || 0)}.`);
+        } catch (e) {
+          msg(`Session load failed: ${e.message}`, true);
+        }
+      }
+      async function refreshCurrentExposureSession() {
+        if (!currentExposureSession) {
+          renderExposureTranscript();
+          return;
+        }
+        await loadExposureSession(Number(currentExposureSession.session_id || 0));
+        await loadExposureSessions();
+      }
+      function restoreInterpretation(interpretation) {
+        const response = interpretation && interpretation.response && typeof interpretation.response === "object"
+          ? interpretation.response
+          : {};
+        if (!Object.keys(response).length) {
+          msg("No saved response snapshot is available for that turn.", true);
+          return;
+        }
+        const question = String(response.original_question || interpretation.question || response.question || "");
+        if (question) el("questionInput").value = question;
+        renderQuestionAnalysis(response);
+        msg("Restored saved interpretation snapshot.");
+      }
+      async function rerunInterpretation(interpretation) {
+        const response = interpretation && interpretation.response && typeof interpretation.response === "object"
+          ? interpretation.response
+          : {};
+        const question = String(response.original_question || (interpretation && interpretation.question) || "");
+        if (!question) { msg("No saved question is available for that turn.", true); return; }
+        el("questionInput").value = question;
+        await analyzeQuestion(null, "Rerunning saved turn...");
+      }
+      async function startNewExposureSession() {
+        const tenantId = selectedTenantId();
+        if (!tenantId) { msg("Select a tenant.", true); return null; }
+        const question = String(el("questionInput").value || "").trim();
+        const title = question || "Exposure investigation";
+        try {
+          currentExposureSession = await callJson("/api/entity-search/exposure-sessions", "POST", { tenant_id: tenantId, title });
+          currentExposureSessionDetail = { ...currentExposureSession, messages: [], interpretations: [] };
+          renderExposureSessionStatus();
+          renderExposureTranscript();
+          await loadExposureSessions();
+          msg("Started investigation session.");
+          return currentExposureSession;
+        } catch (e) {
+          msg(`Session create failed: ${e.message}`, true);
+          return null;
+        }
+      }
+      async function ensureExposureSession(question) {
+        if (currentExposureSession && Number(currentExposureSession.tenant_id) === selectedTenantId()) return currentExposureSession;
+        const tenantId = selectedTenantId();
+        if (!tenantId) return null;
+        currentExposureSession = await callJson(
+          "/api/entity-search/exposure-sessions",
+          "POST",
+          { tenant_id: tenantId, title: String(question || "Exposure investigation") }
+        );
+        currentExposureSessionDetail = { ...currentExposureSession, messages: [], interpretations: [] };
+        renderExposureSessionStatus();
+        renderExposureTranscript();
+        await loadExposureSessions();
+        return currentExposureSession;
+      }
       function initResolvedTenantLabel() {
         const label = el("tenantResolvedLabel");
         if (!label) return;
@@ -590,6 +853,208 @@
           node.appendChild(li);
         }
       }
+      function clearExposureTransactions(message) {
+        currentExposureTransactions = [];
+        const hint = el("txnTableHint");
+        const tbody = el("txnRows");
+        if (hint) hint.textContent = message || "Transactions identified by assistant analysis will appear here.";
+        if (tbody) tbody.innerHTML = "";
+        populateTxnSelectOptions([]);
+      }
+      function getSelectedLowerSet(selectId) {
+        const sel = el(selectId);
+        if (!sel) return new Set();
+        const values = Array.from(sel.selectedOptions || [])
+          .map((o) => String(o.value || "").trim().toLowerCase())
+          .filter(Boolean);
+        return new Set(values);
+      }
+      function populateTxnSelectOptions(rows) {
+        const defs = [
+          { selectId: "txnSelectAccountKey", key: "account_key" },
+          { selectId: "txnSelectAmlClassification", key: "aml_classification" },
+          { selectId: "txnSelectDirection", key: "direction" },
+          { selectId: "txnSelectAmount", key: "amount" },
+          { selectId: "txnSelectCountryCode2", key: "country_code_2" },
+          { selectId: "txnSelectCurrencyCode", key: "currency_code" },
+          { selectId: "txnSelectCounterpartyName", key: "counterparty_name" },
+          { selectId: "txnSelectCounterpartyJurisdiction", key: "counterparty_jurisdiction" },
+        ];
+        for (const def of defs) {
+          const sel = el(def.selectId);
+          if (!sel) continue;
+          const prevSelected = new Set(Array.from(sel.selectedOptions || []).map((o) => String(o.value || "")));
+          const uniques = Array.from(new Set((rows || []).map((r) => {
+            if (def.key === "amount") return Number(r.amount || 0).toFixed(2);
+            return String(r?.[def.key] || "");
+          }).filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+          sel.innerHTML = "";
+          for (const v of uniques) {
+            const opt = document.createElement("option");
+            opt.value = String(v);
+            opt.textContent = String(v);
+            if (prevSelected.has(String(v))) opt.selected = true;
+            sel.appendChild(opt);
+          }
+        }
+      }
+      function parseAmountFilter(rawValue) {
+        const raw = String(rawValue || "").trim();
+        if (!raw) return null;
+        if (raw.includes("-")) {
+          const [a, b] = raw.split("-", 2).map((v) => Number(String(v || "").trim()));
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+          return { min: Math.min(a, b), max: Math.max(a, b) };
+        }
+        const v = Number(raw);
+        if (!Number.isFinite(v)) return null;
+        return { min: v, max: null };
+      }
+      function applyExposureTransactionFilters() {
+        const rows = Array.isArray(currentExposureTransactions) ? currentExposureTransactions : [];
+        const fDateStart = String(el("txnFilterTransactionDateStart")?.value || "").trim();
+        const fDateEnd = String(el("txnFilterTransactionDateEnd")?.value || "").trim();
+        const fTransactionKey = String(el("txnFilterTransactionKey")?.value || "").trim().toLowerCase();
+        const fAccount = String(el("txnFilterAccountKey")?.value || "").trim().toLowerCase();
+        const fAml = String(el("txnFilterAmlClassification")?.value || "").trim().toLowerCase();
+        const fDirection = String(el("txnFilterDirection")?.value || "").trim().toLowerCase();
+        const fCountry = String(el("txnFilterCountryCode2")?.value || "").trim().toLowerCase();
+        const fCurrency = String(el("txnFilterCurrencyCode")?.value || "").trim().toLowerCase();
+        const fCounterparty = String(el("txnFilterCounterpartyName")?.value || "").trim().toLowerCase();
+        const fCounterpartyJurisdiction = String(el("txnFilterCounterpartyJurisdiction")?.value || "").trim().toLowerCase();
+        const fSource = String(el("txnFilterSource")?.value || "").trim().toLowerCase();
+        const sAccount = getSelectedLowerSet("txnSelectAccountKey");
+        const sAml = getSelectedLowerSet("txnSelectAmlClassification");
+        const sDirection = getSelectedLowerSet("txnSelectDirection");
+        const sAmount = getSelectedLowerSet("txnSelectAmount");
+        const sCountry = getSelectedLowerSet("txnSelectCountryCode2");
+        const sCurrency = getSelectedLowerSet("txnSelectCurrencyCode");
+        const sCounterparty = getSelectedLowerSet("txnSelectCounterpartyName");
+        const sCounterpartyJurisdiction = getSelectedLowerSet("txnSelectCounterpartyJurisdiction");
+        const amountRange = parseAmountFilter(String(el("txnFilterAmount")?.value || ""));
+        const filtered = rows.filter((row) => {
+          const amount = Number(row.amount || 0);
+          const transactionDate = String(row.transaction_date || "");
+          const transactionKey = String(row.transaction_key || "").toLowerCase();
+          const accountKey = String(row.account_key || "").toLowerCase();
+          const amlClassification = String(row.aml_classification || "").toLowerCase();
+          const direction = String(row.direction || "").toLowerCase();
+          const amountText = Number(amount || 0).toFixed(2).toLowerCase();
+          const countryCode2 = String(row.country_code_2 || "").toLowerCase();
+          const currencyCode = String(row.currency_code || "").toLowerCase();
+          const counterpartyName = String(row.counterparty_name || "").toLowerCase();
+          const counterpartyJurisdiction = String(row.counterparty_jurisdiction || "").toLowerCase();
+          const source = String(row._source || "").toLowerCase();
+          if (fDateStart && transactionDate && transactionDate < fDateStart) return false;
+          if (fDateEnd && transactionDate && transactionDate > fDateEnd) return false;
+          if ((fDateStart || fDateEnd) && !transactionDate) return false;
+          if (fTransactionKey && !transactionKey.includes(fTransactionKey)) return false;
+          if (fAccount && !accountKey.includes(fAccount)) return false;
+          if (fAml && !amlClassification.includes(fAml)) return false;
+          if (fDirection && !direction.includes(fDirection)) return false;
+          if (fCountry && !countryCode2.includes(fCountry)) return false;
+          if (fCurrency && !currencyCode.includes(fCurrency)) return false;
+          if (fCounterparty && !counterpartyName.includes(fCounterparty)) return false;
+          if (fCounterpartyJurisdiction && !counterpartyJurisdiction.includes(fCounterpartyJurisdiction)) return false;
+          if (fSource && !source.includes(fSource)) return false;
+          if (sAccount.size && !sAccount.has(accountKey)) return false;
+          if (sAml.size && !sAml.has(amlClassification)) return false;
+          if (sDirection.size && !sDirection.has(direction)) return false;
+          if (sAmount.size && !sAmount.has(amountText)) return false;
+          if (sCountry.size && !sCountry.has(countryCode2)) return false;
+          if (sCurrency.size && !sCurrency.has(currencyCode)) return false;
+          if (sCounterparty.size && !sCounterparty.has(counterpartyName)) return false;
+          if (sCounterpartyJurisdiction.size && !sCounterpartyJurisdiction.has(counterpartyJurisdiction)) return false;
+          if (amountRange) {
+            if (amount < amountRange.min) return false;
+            if (amountRange.max !== null && amount > amountRange.max) return false;
+          }
+          return true;
+        });
+        renderExposureTransactionsTable(filtered, rows.length);
+      }
+      function clearExposureTransactionFilters() {
+        [
+          "txnFilterTransactionDateStart",
+          "txnFilterTransactionDateEnd",
+          "txnFilterTransactionKey",
+          "txnFilterAccountKey",
+          "txnFilterAmlClassification",
+          "txnFilterDirection",
+          "txnFilterAmount",
+          "txnFilterCountryCode2",
+          "txnFilterCurrencyCode",
+          "txnFilterCounterpartyName",
+          "txnFilterCounterpartyJurisdiction",
+          "txnFilterSource",
+        ].forEach((id) => {
+          const input = el(id);
+          if (input) input.value = "";
+        });
+        [
+          "txnSelectAccountKey",
+          "txnSelectAmlClassification",
+          "txnSelectDirection",
+          "txnSelectAmount",
+          "txnSelectCountryCode2",
+          "txnSelectCurrencyCode",
+          "txnSelectCounterpartyName",
+          "txnSelectCounterpartyJurisdiction",
+        ].forEach((id) => {
+          const sel = el(id);
+          if (!sel) return;
+          Array.from(sel.options || []).forEach((opt) => { opt.selected = false; });
+        });
+        applyExposureTransactionFilters();
+      }
+      function renderExposureTransactionsTable(rows, totalCount) {
+        const tbody = el("txnRows");
+        const hint = el("txnTableHint");
+        if (!tbody || !hint) return;
+        tbody.innerHTML = "";
+        const sortedRows = [...(rows || [])].sort((a, b) => {
+          const dA = String(a?.transaction_date || "");
+          const dB = String(b?.transaction_date || "");
+          if (dA !== dB) return dB.localeCompare(dA);
+          const tA = String(a?.transaction_ts || "");
+          const tB = String(b?.transaction_ts || "");
+          if (tA !== tB) return tB.localeCompare(tA);
+          return String(b?.transaction_key || "").localeCompare(String(a?.transaction_key || ""));
+        });
+        for (const row of sortedRows) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${escapeHtml(row.transaction_date || "-")}</td>
+            <td>${escapeHtml(row.transaction_key || "-")}</td>
+            <td>${escapeHtml(row.account_key || "-")}</td>
+            <td>${escapeHtml(row.aml_classification || "-")}</td>
+            <td>${escapeHtml(row.direction || "-")}</td>
+            <td style="text-align:right;">${Number(row.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>${escapeHtml(row.country_code_2 || "-")}</td>
+            <td>${escapeHtml(row.currency_code || "-")}</td>
+            <td>${escapeHtml(row.counterparty_name || "-")}</td>
+            <td>${escapeHtml(row.counterparty_jurisdiction || "-")}</td>
+            <td>${escapeHtml(row._source || "-")}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+        hint.textContent = `Showing ${(rows || []).length} of ${Number(totalCount || 0)} transaction row(s) identified by the latest assistant analysis.`;
+      }
+      function collectExposureTransactions(data) {
+        const txEvidence = Array.isArray(data && data.transaction_evidence) ? data.transaction_evidence : [];
+        const rows = [];
+        for (const evidence of txEvidence) {
+          const source = evidence && evidence.scope === "global" ? "global" : String((evidence && evidence.seed_node_id) || "analysis");
+          const sampleRows = Array.isArray(evidence && evidence.sample_rows) ? evidence.sample_rows : [];
+          for (const row of sampleRows) {
+            if (!row || typeof row !== "object") continue;
+            rows.push({ ...row, _source: source });
+          }
+        }
+        currentExposureTransactions = rows;
+        populateTxnSelectOptions(currentExposureTransactions);
+        applyExposureTransactionFilters();
+      }
       function clearQuestionAnalysis() {
         lastQuestionPayload = null;
         el("qaStatus").textContent = "";
@@ -611,6 +1076,7 @@
         if (rows) rows.innerHTML = "";
         const txRows = el("qaTransactionRows");
         if (txRows) txRows.innerHTML = "";
+        clearExposureTransactions();
       }
       function renderQuestionAnalysis(data) {
         const intents = Array.isArray(data.intents) ? data.intents.filter(Boolean) : [];
@@ -636,6 +1102,7 @@
         renderSimpleList("qaRelevance", data.relevance_explanation || []);
         renderSimpleList("qaAssumptions", data.assumptions || []);
         renderSimpleList("qaLimitations", data.limitations || []);
+        collectExposureTransactions(data || {});
 
         const txBody = el("qaTransactionRows");
         if (txBody) {
@@ -717,8 +1184,10 @@
         if (!question) { msg("Enter a question first.", true); return; }
         try {
           el("qaStatus").textContent = statusText || "Running intent + plan + evidence retrieval...";
+          const session = existingPayload ? currentExposureSession : await ensureExposureSession(question);
           const requestPayload = existingPayload || {
             tenant_id: tenantId,
+            session_id: session ? Number(session.session_id) : null,
             question,
             filter_overrides: {},
             seed_limit: Number(el("resultLimit").value || 25),
@@ -727,6 +1196,9 @@
             max_edges: Number(el("maxEdges").value || 2000),
             include_graph: true,
           };
+          if (!requestPayload.session_id && currentExposureSession) {
+            requestPayload.session_id = Number(currentExposureSession.session_id);
+          }
           lastQuestionPayload = requestPayload;
           const payload = await callJson("/api/entity-search/exposure-question", "POST", requestPayload);
           renderQuestionAnalysis(payload || {});
@@ -741,74 +1213,46 @@
             el("qaStatus").textContent = `Analysis complete (${payload.mode || "deterministic"}).`;
             msg("Grounded exposure analysis updated.");
           }
+          await refreshCurrentExposureSession();
         } catch (e) {
           el("qaStatus").textContent = `Analysis failed: ${e.message}`;
           msg(`Analysis failed: ${e.message}`, true);
         }
       }
 
-      async function runSearch() {
-        const q = String(el("searchText").value || "").trim();
-        const tenantId = selectedTenantId();
-        if (!tenantId) { msg("Select a tenant.", true); return; }
-        if (!q) { msg("Enter a name to search.", true); return; }
-        try {
-          clearGraph();
-          const params = new URLSearchParams();
-          params.set("tenant_id", String(tenantId));
-          params.set("q", q);
-          params.set("limit", String(Number(el("resultLimit").value || 25)));
-          const data = await call("/api/entity-search/exposure-seed-search?" + params.toString());
-          renderSearchResults((data && data.results) ? data.results : []);
-          msg(`Found ${(data && data.result_count) || 0} exposure match(es).`);
-        } catch (e) {
-          msg(`Search failed: ${e.message}`, true);
-        }
-      }
-      function renderSearchResults(rows) {
-        const tbody = el("resultsRows");
-        tbody.innerHTML = "";
-        for (const row of (rows || [])) {
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${row.node_type || ""}</td>
-            <td>${row.label || ""}</td>
-            <td>${row.business_key || ""}</td>
-            <td>${Array.isArray(row.matched_fields) ? row.matched_fields.join(", ") : ""}</td>
-            <td>${row.score || 0}</td>
-            <td></td>
-          `;
-          const btn = document.createElement("button");
-          btn.textContent = "Load Exposure";
-          btn.onclick = () => loadExposureGraph(row);
-          tr.children[5].appendChild(btn);
-          tbody.appendChild(tr);
-        }
-      }
-      async function loadExposureGraph(resultRow) {
-        const nodeId = String((resultRow && resultRow.node_id) || "");
-        const tenantId = selectedTenantId();
-        if (!tenantId) { msg("Select a tenant.", true); return; }
-        if (!nodeId) { msg("Seed node id is required.", true); return; }
-        try {
-          const params = new URLSearchParams();
-          params.set("tenant_id", String(tenantId));
-          params.set("node_id", nodeId);
-          params.set("hops", String(Number(el("hops").value || 2)));
-          params.set("max_nodes", String(Number(el("maxNodes").value || 500)));
-          params.set("max_edges", String(Number(el("maxEdges").value || 2000)));
-          const payload = await call("/api/entity-search/exposure-graph?" + params.toString());
-          renderGraph(payload, { collapse: true });
-          clearDetails();
-          msg(`Graph loaded for ${nodeId}: ${payload.node_count || 0} nodes, ${payload.edge_count || 0} edges.`);
-        } catch (e) {
-          msg(`Graph load failed: ${e.message}`, true);
-        }
-      }
-
       initResolvedTenantLabel();
+      renderExposureSessionStatus();
+      renderExposureTranscript();
+      loadExposureSessions();
       clearQuestionAnalysis();
       clearDetails();
+      [
+        "txnFilterTransactionDateStart",
+        "txnFilterTransactionDateEnd",
+        "txnFilterTransactionKey",
+        "txnFilterAccountKey",
+        "txnFilterAmlClassification",
+        "txnFilterDirection",
+        "txnFilterAmount",
+        "txnFilterCountryCode2",
+        "txnFilterCurrencyCode",
+        "txnFilterCounterpartyName",
+        "txnFilterCounterpartyJurisdiction",
+        "txnFilterSource",
+        "txnSelectAccountKey",
+        "txnSelectAmlClassification",
+        "txnSelectDirection",
+        "txnSelectAmount",
+        "txnSelectCountryCode2",
+        "txnSelectCurrencyCode",
+        "txnSelectCounterpartyName",
+        "txnSelectCounterpartyJurisdiction",
+      ].forEach((id) => {
+        const input = el(id);
+        if (!input) return;
+        input.addEventListener("input", () => applyExposureTransactionFilters());
+        input.addEventListener("change", () => applyExposureTransactionFilters());
+      });
     </script>
   </body>
 </html>

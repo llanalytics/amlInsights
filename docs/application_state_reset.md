@@ -135,6 +135,167 @@ Repo: `/home/ehale/Documents/amlInsightsDataHub`
 
 ## Session Updates
 
+### 2026-04-27 - Exposure Investigation Sessions (Phase 9)
+
+- Confirmed the previous checkpoint:
+  - `Show exposure for ARIGATO LIMITED outside the US` returns `needs_clarification`.
+  - Clarification choices include:
+    - Counterparty jurisdiction
+    - Transaction country
+    - Customer country
+    - Branch country
+  - Rerunning with `outside_counterparty_jurisdiction=US` interprets as:
+    - `counterparty.jurisdiction outside US`
+  - Transaction evidence returned 15 rows and sampled jurisdictions excluded `US`.
+- Added persisted exposure investigation session support in `amlInsights`:
+  - New migration:
+    - `alembic/versions/20260427_0019_add_exposure_sessions.py`
+  - New tables:
+    - `exp_sessions`
+    - `exp_session_messages`
+    - `exp_session_interpretations`
+  - New ORM models:
+    - `ExposureSession`
+    - `ExposureSessionMessage`
+    - `ExposureSessionInterpretation`
+- Added Exposure Search APIs:
+  - `GET /api/entity-search/exposure-sessions`
+  - `POST /api/entity-search/exposure-sessions`
+  - `GET /api/entity-search/exposure-sessions/{session_id}`
+  - `PATCH /api/entity-search/exposure-sessions/{session_id}`
+  - `POST /api/entity-search/exposure-question` now accepts optional `session_id` and persists:
+    - user question message
+    - assistant summary message
+    - interpretation/query/filter/response snapshot
+- UI changes:
+  - `templates/exposure_search.html` now has a lightweight Investigation Session panel.
+  - `Analyze Question` auto-creates a session when needed and sends `session_id` with analysis calls.
+  - Clarification reruns remain attached to the active session.
+- Validation:
+  - `python -m py_compile main.py platform_models.py` succeeded.
+  - `./scripts/migrate_db.sh local` upgraded local DB to `20260427_0019`.
+  - Created session `#1` locally and verified:
+    - 2 persisted messages
+    - 1 persisted interpretation
+    - stored filter snapshot includes `outside_counterparty_jurisdiction = US`.
+- Next recommended step:
+  - Add true follow-up interpretation that uses session history to carry forward prior subject/filter context for prompts like:
+    - `Now only show wires`
+    - `Switch outside US to transaction country instead`
+    - `Limit to Panama-linked counterparties`
+
+### 2026-04-27 - Session-Aware Exposure Follow-Ups (Phase 10)
+
+- Added follow-up context resolution for `POST /api/entity-search/exposure-question` when `session_id` is present.
+- Behavior:
+  - Loads the latest persisted interpretation for the session.
+  - Carries forward prior subject when the analyst asks a short follow-up.
+  - Carries forward prior structured transaction filters.
+  - Lets explicit follow-up language override dimensions, for example:
+    - `Switch outside US to transaction country instead`
+  - Adds `followup_resolution` to response/audit/session snapshot, including:
+    - `original_question`
+    - `effective_question`
+    - prior subject/filter context
+    - inherited filter overrides
+- Added guardrail:
+  - When structured overrides are inherited or supplied, the OpenAI transaction filter mapper no longer adds extra filters that can over-constrain transaction evidence.
+- Added transaction-context bridge:
+  - If a follow-up selects an intent without a transaction detail step, but the prior session had transaction filters, a `transaction_details` step is added to the query plan.
+  - This keeps prompts like `Limit to Panama-linked counterparties` from dropping the prior outbound/wire/non-US transaction context.
+- Verification completed locally:
+  - Baseline:
+    - `Show exposure for ARIGATO LIMITED outside the US` with counterparty-jurisdiction clarification returned 15 transaction rows.
+  - Follow-up:
+    - `Now only show wires`
+    - Effective question: `Now only show wires for ARIGATO LIMITED`
+    - Carried forward outbound + wire + counterparty jurisdiction outside US.
+    - Returned 15 transaction rows.
+  - Follow-up:
+    - `Switch outside US to transaction country instead`
+    - Effective question: `Switch outside US to transaction country instead for ARIGATO LIMITED`
+    - Switched to `outside_country_code_2 = US`.
+    - Returned 17 transaction rows.
+  - Follow-up:
+    - `Limit to Panama-linked counterparties`
+    - Effective question: `Limit to Panama-linked counterparties for ARIGATO LIMITED`
+    - Selected `offshore_exposure`.
+    - Added transaction detail step from prior context.
+    - Returned 15 transaction rows.
+- Next recommended step:
+  - Add a visible session transcript/history panel in Exposure Search so analysts can review and reload prior session turns from the browser.
+
+### 2026-04-27 - Exposure Session Transcript UI (Phase 11)
+
+- Added a lightweight session history panel to `templates/exposure_search.html`.
+- New UI elements:
+  - Recent Sessions list:
+    - loads the latest exposure sessions for the current tenant
+    - supports manual refresh
+    - supports loading an older session as the active session
+  - Active Transcript:
+    - shows persisted user/assistant turns
+    - shows the interpreted natural-language summary for turns with interpretations
+    - includes `Restore` and `Rerun` actions for persisted interpretation turns
+- Behavior:
+  - Starting a new analysis still auto-creates a session when none is active.
+  - Completed analyses refresh the active transcript and recent session list.
+  - `Restore` renders the saved response snapshot back into the analysis pane.
+  - `Rerun` uses the saved original analyst question when available, preserving follow-up behavior through the current active session.
+- Validation:
+  - `python -m py_compile main.py platform_models.py` succeeded.
+  - Session list API returned existing local sessions.
+  - Session detail API for local session `#4` returned:
+    - 4 messages
+    - 2 interpretations
+    - latest original question: `Limit to Panama-linked counterparties`
+    - latest effective question: `Limit to Panama-linked counterparties for ARIGATO LIMITED`
+- Note:
+  - Direct `/ui/exposure-search` curl redirects to `/login` without a browser session, as expected. The page still uses session auth for browser rendering while API calls use the existing `x-user-email` local/test path.
+- Next recommended step:
+  - Add a small session title/status editor and optional archive action so old investigations can be closed without leaving the page.
+
+### 2026-04-27 - Subjectless Transaction Aggregate Fix (France Wires)
+
+- Issue found:
+  - Question:
+    - `how many wires are there to France`
+  - The assistant mapped France to `outside_counterparty_jurisdiction=FR`, which means "not France" rather than "to France".
+  - The flow also tried to answer through graph seed neighborhoods, causing random Panama-node seeds to drive transaction lookup.
+- Data validation:
+  - `dh_dim_counterparty_account` stores counterparty attributes in `attr_json`.
+  - Local Data Hub had:
+    - 17 counterparty accounts with `jurisdiction = FR`
+    - 17 linked cash facts for those counterparties
+    - 1 outbound wire to `FR`
+- Fixes:
+  - `amlInsights/main.py`
+    - Added deterministic country phrase mapping so `to France` maps to:
+      - `counterparty_jurisdiction = FR`
+      - outbound direction
+    - Removed stale template `outside_country_code_2=US` when a specific counterparty jurisdiction is mapped.
+    - Added global aggregate detection for count-style transaction questions.
+    - For global aggregate questions, calls Data Hub:
+      - `/api/graph/exposure/transactions/global`
+    - Interpreted query now renders as global transaction count instead of showing a misleading graph seed subject.
+  - `amlInsightsDataHub/app/graph_layer.py`
+    - Added `build_global_cash_transactions(...)`.
+  - `amlInsightsDataHub/app/main.py`
+    - Added `GET /api/graph/exposure/transactions/global`.
+- Verification:
+  - Direct Data Hub global route with:
+    - `direction=Outbound`
+    - `mechanism_contains=Wire`
+    - `counterparty_jurisdiction=FR`
+  - Returned 1 row:
+    - `TXN-EXT-900003730`
+    - `counterparty_jurisdiction = FR`
+    - `mechanism = Wire`
+    - `direction = Outbound`
+  - Full amlInsights natural-language path returned:
+    - `Interpreted as global transaction count; filters transaction.direction equals Outbound, transaction.mechanism contains Wire, counterparty.jurisdiction equals FR.`
+    - `tx_rows = 1`
+
 ### 2026-04-24 - Exposure Interface Refactor (LLM-Grounded Pattern, Phase 1)
 
 - Goal:
@@ -430,3 +591,63 @@ Repo: `/home/ehale/Documents/amlInsightsDataHub`
     - `Now only show wires`
     - `Switch outside US to transaction country instead`
     - `Limit to Panama-linked counterparties`
+
+### 2026-04-27 - Exposure Assistant Transaction Section
+
+- Replaced the old Exposure Search/name-search and Search Results UI sections in `templates/exposure_search.html` with a `Transactions` section.
+- The transaction section is modeled after the customer-search transaction grid:
+  - renders rows identified by the latest assistant interaction from `transaction_evidence[].sample_rows`
+  - supports column text filters, date range filters, amount range filtering, and multi-select filters
+  - includes transaction, account, AML classification, direction, amount, country, currency, counterparty, counterparty jurisdiction, and source columns
+- Moved analysis controls (`resultLimit`, `hops`, `maxNodes`, `maxEdges`) into the Grounded Exposure Assistant panel so question analysis still has the same parameters available after removing the old search form.
+- Increased exposure assistant transaction sample rows from 25 to 500 in `main.py` so the UI can display a useful transaction grid rather than only a tiny preview.
+- Transaction-driven assistant summaries now prefer the retrieved transaction evidence when transaction rows are present, so global transaction searches do not summarize unrelated seed-search context.
+- Verification completed:
+  - `amlInsights`: `.venv/bin/python -m py_compile main.py platform_models.py`
+  - `amlInsightsDataHub`: `../amlInsightsDataHub/.venv/bin/python -m py_compile ../amlInsightsDataHub/app/main.py ../amlInsightsDataHub/app/graph_layer.py`
+  - `find wires to france` returned 1 global transaction row:
+    - `TXN-EXT-900003730`
+    - outbound wire
+    - `counterparty_jurisdiction = FR`
+
+### 2026-04-27 - End-of-Day Local Status
+
+- Local applications were verified running before close:
+  - `amlInsights`: `http://127.0.0.1:8000`
+  - `amlInsightsDataHub`: `http://127.0.0.1:8100`
+  - Health checks returned:
+    - `amlInsights`: `{"status":"ok"}`
+    - `amlInsightsDataHub`: `{"ok":true,"service":"data-hub"}`
+- Current active `amlInsights` working files:
+  - `main.py`
+  - `platform_models.py`
+  - `templates/exposure_search.html`
+  - `docs/application_state_reset.md`
+  - `alembic/versions/20260427_0019_add_exposure_sessions.py`
+- Current active `amlInsightsDataHub` working files:
+  - `app/main.py`
+  - `app/graph_layer.py`
+- Major features completed today:
+  - Persisted exposure investigation sessions.
+  - Session-aware follow-up handling with subject/filter carry-forward.
+  - Exposure session transcript UI with restore/rerun actions.
+  - France-wire global transaction handling:
+    - `find wires to france`
+    - `how many wires are there to France`
+  - Global transaction route in Data Hub:
+    - `GET /api/graph/exposure/transactions/global`
+  - Exposure Search UI now shows a transaction grid instead of the old exposure name search/results sections.
+- Verification completed:
+  - `amlInsights`: `.venv/bin/python -m py_compile main.py platform_models.py`
+  - `amlInsightsDataHub`: `../amlInsightsDataHub/.venv/bin/python -m py_compile ../amlInsightsDataHub/app/main.py ../amlInsightsDataHub/app/graph_layer.py`
+  - API smoke test for `find wires to france` returned:
+    - summary: global transaction search returned 1 row
+    - interpreted filters: outbound wire, counterparty jurisdiction `FR`
+    - sample transaction: `TXN-EXT-900003730`
+- Request-limit note:
+  - No application-level request limit was observed during the final verification.
+  - Some local `curl` calls from the Codex sandbox needed escalated execution to reach `127.0.0.1`; that was sandbox/network permission behavior, not an app rate limit.
+- Known follow-up:
+  - The transaction grid is wired from `transaction_evidence[].sample_rows`; it now receives up to 500 sampled rows.
+  - Next browser pass should confirm the UI rendering and column filters visually from an authenticated browser session.
+  - Consider suppressing graph seed-search execution entirely for global subjectless transaction questions so the audit trail is cleaner, even though the returned transaction evidence and summary are now correct.

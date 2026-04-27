@@ -42,6 +42,9 @@ from platform_models import (
     Role,
     TenantModuleEntitlement,
     TenantDataHubConnection,
+    ExposureSession,
+    ExposureSessionInterpretation,
+    ExposureSessionMessage,
     BusinessUnit,
     RedFlag,
     SourceDocument,
@@ -222,6 +225,7 @@ class CatalogAssistantChatRequest(BaseModel):
 
 class ExposureQuestionRequest(BaseModel):
     tenant_id: int = Field(ge=1)
+    session_id: int | None = Field(default=None, ge=1)
     question: str = Field(min_length=1, max_length=4000)
     filter_overrides: dict[str, object] = Field(default_factory=dict)
     seed_limit: int = Field(default=8, ge=1, le=25)
@@ -232,6 +236,17 @@ class ExposureQuestionRequest(BaseModel):
     include_ofac_matches: bool = True
     include_txn_flow: bool = True
     include_graph: bool = True
+
+
+class ExposureSessionCreateRequest(BaseModel):
+    tenant_id: int = Field(ge=1)
+    title: str | None = Field(default=None, max_length=255)
+
+
+class ExposureSessionUpdateRequest(BaseModel):
+    tenant_id: int = Field(ge=1)
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    status: str | None = Field(default=None, min_length=1, max_length=32)
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
@@ -852,6 +867,24 @@ _TX_MECHANISM_SYNONYMS: dict[str, set[str]] = {
     "branch": {"branch", "teller"},
     "atm": {"atm", "cash machine"},
 }
+_COUNTRY_NAME_TO_CODE_2 = {
+    "france": "FR",
+    "french republic": "FR",
+    "united states": "US",
+    "usa": "US",
+    "us": "US",
+    "u.s.": "US",
+    "panama": "PA",
+    "japan": "JP",
+    "china": "CN",
+    "canada": "CA",
+    "united kingdom": "GB",
+    "uk": "GB",
+    "germany": "DE",
+    "spain": "ES",
+    "italy": "IT",
+    "mexico": "MX",
+}
 
 
 def _openai_exposure_filter_mapper_enabled() -> bool:
@@ -893,6 +926,23 @@ def _deterministic_transaction_filter_mapping(
             mapped["mechanism_contains"] = mechanisms[canonical]
             reasons.append(f"Matched mechanism synonym set for `{canonical}`.")
             confidence += 0.4
+            break
+
+    for country_name, country_code in _COUNTRY_NAME_TO_CODE_2.items():
+        if country_code not in {v.upper() for v in _catalog_list_values(catalog, "counterparty_jurisdictions")}:
+            continue
+        escaped = re.escape(country_name)
+        if re.search(rf"\b(to|toward|towards|into)\s+(the\s+)?{escaped}\b", q):
+            mapped["counterparty_jurisdiction"] = country_code
+            mapped.setdefault("direction", directions.get("outbound", "outbound"))
+            reasons.append(f"Mapped destination country `{country_name}` to counterparty_jurisdiction `{country_code}`.")
+            confidence += 0.6
+            break
+        if re.search(rf"\b(from)\s+(the\s+)?{escaped}\b", q):
+            mapped["counterparty_jurisdiction"] = country_code
+            mapped.setdefault("direction", directions.get("inbound", "inbound"))
+            reasons.append(f"Mapped origin country `{country_name}` to counterparty_jurisdiction `{country_code}`.")
+            confidence += 0.6
             break
 
     if any(term in q for term in ("outside us", "outside the us", "non-us", "non us", "outside united states")):
@@ -1226,7 +1276,10 @@ def _normalize_transaction_filters_for_question(
     if ambiguous_outside_us:
         normalized.pop("outside_country_code_2", None)
     normalized.update(deterministic_valid)
-    if "outside_counterparty_jurisdiction" in deterministic_valid and "outside_country_code_2" in normalized:
+    if (
+        ("outside_counterparty_jurisdiction" in deterministic_valid or "counterparty_jurisdiction" in deterministic_valid)
+        and "outside_country_code_2" in normalized
+    ):
         normalized.pop("outside_country_code_2", None)
     if "outside_customer_country_code" in deterministic_valid and "outside_country_code_2" in normalized:
         normalized.pop("outside_country_code_2", None)
@@ -1240,14 +1293,19 @@ def _normalize_transaction_filters_for_question(
         normalized.update(override_filters)
         if any(
             key in override_filters
-            for key in ("outside_counterparty_jurisdiction", "outside_customer_country_code", "outside_branch_country_code")
+            for key in (
+                "outside_counterparty_jurisdiction",
+                "counterparty_jurisdiction",
+                "outside_customer_country_code",
+                "outside_branch_country_code",
+            )
         ):
             normalized.pop("outside_country_code_2", None)
     mode = "deterministic"
     confidence = deterministic_confidence
     rationale = "; ".join(deterministic_reasons)
 
-    if confidence < EXPOSURE_FILTER_MAPPER_CONFIDENCE_THRESHOLD and not ambiguous_outside_us:
+    if confidence < EXPOSURE_FILTER_MAPPER_CONFIDENCE_THRESHOLD and not ambiguous_outside_us and not override_filters:
         llm = _openai_map_transaction_filters(
             question=question,
             catalog=catalog,
@@ -1261,7 +1319,10 @@ def _normalize_transaction_filters_for_question(
             )
             if llm_filters:
                 normalized.update(llm_filters)
-                if "outside_counterparty_jurisdiction" in llm_filters and "outside_country_code_2" in normalized:
+                if (
+                    ("outside_counterparty_jurisdiction" in llm_filters or "counterparty_jurisdiction" in llm_filters)
+                    and "outside_country_code_2" in normalized
+                ):
                     normalized.pop("outside_country_code_2", None)
                 if "outside_customer_country_code" in llm_filters and "outside_country_code_2" in normalized:
                     normalized.pop("outside_country_code_2", None)
@@ -1352,6 +1413,79 @@ def _query_plan_step_by_name(query_plan: dict[str, object], step_name: str) -> d
         if str(step.get("name") or "").strip() == step_name:
             return step
     return None
+
+
+def _ensure_followup_transaction_step(
+    query_plan: dict[str, object],
+    *,
+    followup_resolution: dict[str, object] | None,
+    hops: int,
+) -> None:
+    if not followup_resolution:
+        return
+    inherited = followup_resolution.get("inherited_filter_overrides")
+    if not isinstance(inherited, dict) or not inherited:
+        return
+    if _query_plan_step_by_name(query_plan, "transaction_details"):
+        return
+    steps = query_plan.get("steps")
+    if not isinstance(steps, list):
+        steps = []
+        query_plan["steps"] = steps
+    params = {
+        "hops": str(max(1, int(hops))),
+        "limit": "200",
+    }
+    for key in (
+        "direction",
+        "mechanism_contains",
+        "aml_classification_contains",
+        "outside_country_code_2",
+        "outside_counterparty_jurisdiction",
+        "counterparty_jurisdiction",
+        "outside_customer_country_code",
+        "customer_country_code",
+        "outside_branch_country_code",
+        "branch_country_code",
+    ):
+        value = inherited.get(key)
+        if value is not None and value != "":
+            params[key] = value
+    steps.append(
+        {
+            "step": len(steps) + 1,
+            "name": "transaction_details",
+            "query_type": "cash_fact_transaction_retrieval",
+            "endpoint": "/api/graph/exposure/transactions",
+            "params": params,
+            "notes": "Added from prior session context for a follow-up question.",
+        }
+    )
+
+
+def _is_global_transaction_aggregate_question(question: str, tx_mapping_info: dict[str, object] | None) -> bool:
+    q = str(question or "").strip().lower()
+    if not re.search(r"\b(wire|wires|payment|payments|transfer|transfers|transactions)\b", q):
+        return False
+    if not re.search(r"\b(how many|count|total number|number of|find|show|list|get)\b", q):
+        return False
+    applied = (
+        tx_mapping_info.get("applied_filters")
+        if isinstance(tx_mapping_info, dict) and isinstance(tx_mapping_info.get("applied_filters"), dict)
+        else {}
+    )
+    return any(
+        applied.get(key)
+        for key in (
+            "counterparty_jurisdiction",
+            "outside_counterparty_jurisdiction",
+            "outside_country_code_2",
+            "customer_country_code",
+            "outside_customer_country_code",
+            "branch_country_code",
+            "outside_branch_country_code",
+        )
+    )
 
 
 def _merge_graph_payloads(base_payload: dict[str, object], add_payload: dict[str, object]) -> dict[str, object]:
@@ -7563,6 +7697,491 @@ def entity_search_exposure_graph(
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")
 
 
+def _ensure_exposure_access(db: Session, auth: AuthContext, tenant_id: int) -> None:
+    is_platform_admin = _is_platform_admin_user(db, auth.user_email)
+    allowed = is_platform_admin or _user_has_any_tenant_role(
+        db,
+        auth.user_email,
+        tenant_id,
+        ("tenant_investigator", "tenant_admin"),
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Exposure Search requires tenant_investigator or tenant_admin.")
+
+
+def _exposure_session_title(question: str | None) -> str:
+    title = re.sub(r"\s+", " ", str(question or "").strip())
+    if not title:
+        return "Exposure investigation"
+    return title[:252] + "..." if len(title) > 255 else title
+
+
+def _json_load_object(raw: str | None) -> object:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return raw
+
+
+def _latest_exposure_session_interpretation(
+    db: Session,
+    *,
+    session_id: int,
+    tenant_id: int,
+) -> ExposureSessionInterpretation | None:
+    return (
+        db.query(ExposureSessionInterpretation)
+        .filter(
+            ExposureSessionInterpretation.session_id == session_id,
+            ExposureSessionInterpretation.tenant_id == tenant_id,
+        )
+        .order_by(ExposureSessionInterpretation.created_at.desc(), ExposureSessionInterpretation.id.desc())
+        .first()
+    )
+
+
+def _prior_interpretation_context(row: ExposureSessionInterpretation | None) -> dict[str, object]:
+    if not row:
+        return {}
+    interpreted = _json_load_object(row.interpretation_json)
+    mapping = _json_load_object(row.transaction_filter_mapping_json)
+    if not isinstance(interpreted, dict):
+        interpreted = {}
+    if not isinstance(mapping, dict):
+        mapping = {}
+    subject = interpreted.get("subject") if isinstance(interpreted.get("subject"), dict) else {}
+    applied = mapping.get("applied_filters") if isinstance(mapping.get("applied_filters"), dict) else {}
+    return {
+        "interpretation_id": int(row.id),
+        "message_id": int(row.message_id) if row.message_id is not None else None,
+        "question": row.question,
+        "subject": subject,
+        "applied_filters": {
+            str(k): v
+            for k, v in applied.items()
+            if v is not None and v != ""
+        },
+    }
+
+
+def _question_mentions_prior_subject(question: str, subject: dict[str, object]) -> bool:
+    q = str(question or "").lower()
+    candidates = [
+        str(subject.get("label") or ""),
+        str(subject.get("business_key") or ""),
+        str(subject.get("node_id") or ""),
+    ]
+    for candidate in candidates:
+        cleaned = candidate.strip()
+        if cleaned and cleaned.lower() in q:
+            return True
+    return False
+
+
+def _looks_like_followup(question: str) -> bool:
+    q = str(question or "").strip().lower()
+    if not q:
+        return False
+    starters = (
+        "now ",
+        "only ",
+        "also ",
+        "switch ",
+        "change ",
+        "limit ",
+        "filter ",
+        "show only ",
+        "instead ",
+        "rerun ",
+        "make it ",
+    )
+    if q.startswith(starters):
+        return True
+    return bool(re.search(r"\b(same|that|those|this|it|instead|narrow|exclude|include)\b", q))
+
+
+def _clear_geo_filters(filters: dict[str, object]) -> None:
+    for key in (
+        "outside_country_code_2",
+        "outside_counterparty_jurisdiction",
+        "counterparty_jurisdiction",
+        "outside_customer_country_code",
+        "customer_country_code",
+        "outside_branch_country_code",
+        "branch_country_code",
+    ):
+        filters.pop(key, None)
+
+
+def _followup_filter_overrides(question: str, prior_filters: dict[str, object]) -> dict[str, object]:
+    q = str(question or "").lower()
+    out = dict(prior_filters)
+
+    if "wire" in q or "wires" in q:
+        out["mechanism_contains"] = "wire"
+    if "ach" in q:
+        out["mechanism_contains"] = "ach"
+    if "outbound" in q or "outgoing" in q or "payments to" in q or "transfers to" in q:
+        out["direction"] = "outbound"
+    if "inbound" in q or "incoming" in q or "payments from" in q or "transfers from" in q:
+        out["direction"] = "inbound"
+
+    if _outside_us_phrase_present(question) or "outside us" in q or "outside the us" in q:
+        if "transaction countr" in q or "payment countr" in q:
+            _clear_geo_filters(out)
+            out["outside_country_code_2"] = "US"
+        elif "counterparty" in q or "counterparties" in q:
+            _clear_geo_filters(out)
+            out["outside_counterparty_jurisdiction"] = "US"
+        elif "customer countr" in q or "client countr" in q:
+            _clear_geo_filters(out)
+            out["outside_customer_country_code"] = "US"
+        elif "branch countr" in q:
+            _clear_geo_filters(out)
+            out["outside_branch_country_code"] = "US"
+
+    if ("switch" in q or "change" in q) and ("transaction countr" in q or "payment countr" in q):
+        _clear_geo_filters(out)
+        out["outside_country_code_2"] = "US"
+    if ("switch" in q or "change" in q) and ("counterparty" in q or "counterparties" in q):
+        _clear_geo_filters(out)
+        out["outside_counterparty_jurisdiction"] = "US"
+    if ("switch" in q or "change" in q) and "customer countr" in q:
+        _clear_geo_filters(out)
+        out["outside_customer_country_code"] = "US"
+    if ("switch" in q or "change" in q) and "branch countr" in q:
+        _clear_geo_filters(out)
+        out["outside_branch_country_code"] = "US"
+
+    return out
+
+
+def _resolve_exposure_followup_context(
+    db: Session,
+    *,
+    payload: ExposureQuestionRequest,
+) -> tuple[str, dict[str, object], dict[str, object] | None]:
+    if not payload.session_id:
+        return payload.question, payload.filter_overrides, None
+
+    prior = _latest_exposure_session_interpretation(
+        db,
+        session_id=int(payload.session_id),
+        tenant_id=int(payload.tenant_id),
+    )
+    context = _prior_interpretation_context(prior)
+    subject = context.get("subject") if isinstance(context.get("subject"), dict) else {}
+    prior_filters = context.get("applied_filters") if isinstance(context.get("applied_filters"), dict) else {}
+    if not subject and not prior_filters:
+        return payload.question, payload.filter_overrides, None
+
+    explicit_overrides = payload.filter_overrides if isinstance(payload.filter_overrides, dict) else {}
+    should_apply = _looks_like_followup(payload.question) or bool(explicit_overrides)
+    if not should_apply:
+        return payload.question, payload.filter_overrides, None
+
+    subject_label = str(subject.get("label") or subject.get("node_id") or "").strip()
+    effective_question = payload.question
+    carried_subject = False
+    if subject_label and not _question_mentions_prior_subject(payload.question, subject):
+        effective_question = f"{payload.question} for {subject_label}"
+        carried_subject = True
+
+    inherited_overrides = _followup_filter_overrides(payload.question, prior_filters)
+    inherited_overrides.update(explicit_overrides)
+    resolution = {
+        "is_followup": True,
+        "original_question": payload.question,
+        "effective_question": effective_question,
+        "carried_subject": carried_subject,
+        "prior_context": context,
+        "inherited_filter_overrides": inherited_overrides,
+        "explicit_filter_overrides": explicit_overrides,
+    }
+    return effective_question, inherited_overrides, resolution
+
+
+def _serialize_exposure_session(row: ExposureSession) -> dict[str, object]:
+    return {
+        "session_id": int(row.id),
+        "tenant_id": int(row.tenant_id),
+        "title": row.title,
+        "status": row.status,
+        "created_by_email": row.created_by_email,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _serialize_exposure_session_message(row: ExposureSessionMessage) -> dict[str, object]:
+    return {
+        "message_id": int(row.id),
+        "session_id": int(row.session_id),
+        "tenant_id": int(row.tenant_id),
+        "role": row.role,
+        "content": row.content,
+        "payload": _json_load_object(row.payload_json),
+        "created_by_email": row.created_by_email,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _serialize_exposure_session_interpretation(row: ExposureSessionInterpretation) -> dict[str, object]:
+    return {
+        "interpretation_id": int(row.id),
+        "session_id": int(row.session_id),
+        "message_id": int(row.message_id) if row.message_id is not None else None,
+        "tenant_id": int(row.tenant_id),
+        "question": row.question,
+        "status": row.status,
+        "mode": row.mode,
+        "intent": row.intent,
+        "interpreted_query": _json_load_object(row.interpretation_json),
+        "structured_query_plan": _json_load_object(row.query_plan_json),
+        "transaction_filter_mapping": _json_load_object(row.transaction_filter_mapping_json),
+        "summary": row.response_summary,
+        "response": _json_load_object(row.response_payload_json),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _response_snapshot_for_session(response_data: dict[str, object]) -> dict[str, object]:
+    snapshot = dict(response_data)
+    graph_payload = snapshot.pop("graph_payload", None)
+    if isinstance(graph_payload, dict):
+        elements = graph_payload.get("elements") if isinstance(graph_payload.get("elements"), dict) else {}
+        nodes = elements.get("nodes") if isinstance(elements.get("nodes"), list) else []
+        edges = elements.get("edges") if isinstance(elements.get("edges"), list) else []
+        snapshot["graph_payload_summary"] = {
+            "snapshot_id": graph_payload.get("snapshot_id"),
+            "as_of_ts": graph_payload.get("as_of_ts"),
+            "center_node": graph_payload.get("center_node"),
+            "node_count": graph_payload.get("node_count"),
+            "edge_count": graph_payload.get("edge_count"),
+            "returned_node_count": len(nodes),
+            "returned_edge_count": len(edges),
+        }
+    return snapshot
+
+
+def _persist_exposure_session_exchange(
+    db: Session,
+    *,
+    session_id: int | None,
+    tenant_id: int,
+    auth: AuthContext,
+    request_payload: ExposureQuestionRequest,
+    response_data: dict[str, object],
+) -> None:
+    if not session_id:
+        return
+    session = (
+        db.query(ExposureSession)
+        .filter(ExposureSession.id == session_id, ExposureSession.tenant_id == tenant_id)
+        .first()
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Exposure session not found.")
+
+    now = datetime.now(timezone.utc)
+    actor_user_id = _get_user_id_by_email(db, auth.user_email or "")
+    user_message = ExposureSessionMessage(
+        session_id=int(session.id),
+        tenant_id=tenant_id,
+        role="user",
+        content=request_payload.question,
+        payload_json=_safe_json_dumps(
+            {
+                "session_id": request_payload.session_id,
+                "filter_overrides": request_payload.filter_overrides,
+                "followup_resolution": response_data.get("followup_resolution"),
+                "seed_limit": request_payload.seed_limit,
+                "hops": request_payload.hops,
+                "max_nodes": request_payload.max_nodes,
+                "max_edges": request_payload.max_edges,
+                "include_surrogates": request_payload.include_surrogates,
+                "include_ofac_matches": request_payload.include_ofac_matches,
+                "include_txn_flow": request_payload.include_txn_flow,
+                "include_graph": request_payload.include_graph,
+            }
+        ),
+        created_by_user_id=actor_user_id,
+        created_by_email=auth.user_email,
+        created_at=now,
+    )
+    db.add(user_message)
+    db.flush()
+
+    status = str(response_data.get("status") or response_data.get("mode") or "")
+    summary = str(response_data.get("summary") or "")
+    db.add(
+        ExposureSessionInterpretation(
+            session_id=int(session.id),
+            message_id=int(user_message.id),
+            tenant_id=tenant_id,
+            question=str(response_data.get("question") or request_payload.question),
+            status=status or None,
+            mode=str(response_data.get("mode") or "") or None,
+            intent=str(response_data.get("intent") or "") or None,
+            interpretation_json=_safe_json_dumps(response_data.get("interpreted_query")),
+            query_plan_json=_safe_json_dumps(response_data.get("structured_query_plan")),
+            transaction_filter_mapping_json=_safe_json_dumps(response_data.get("transaction_filter_mapping")),
+            response_summary=summary,
+            response_payload_json=_safe_json_dumps(_response_snapshot_for_session(response_data)),
+            created_at=now,
+        )
+    )
+    db.add(
+        ExposureSessionMessage(
+            session_id=int(session.id),
+            tenant_id=tenant_id,
+            role="assistant",
+            content=summary or status or "Exposure analysis completed.",
+            payload_json=_safe_json_dumps(
+                {
+                    "status": response_data.get("status"),
+                    "mode": response_data.get("mode"),
+                    "intent": response_data.get("intent"),
+                    "interpreted_query": response_data.get("interpreted_query"),
+                    "transaction_filter_mapping": response_data.get("transaction_filter_mapping"),
+                }
+            ),
+            created_by_user_id=None,
+            created_by_email=None,
+            created_at=now,
+        )
+    )
+    session.updated_at = now
+
+
+@app.get("/api/entity-search/exposure-sessions")
+def list_exposure_sessions(
+    tenant_id: int = Query(..., ge=1),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        _ensure_exposure_access(db, auth, tenant_id)
+        rows = (
+            db.query(ExposureSession)
+            .filter(ExposureSession.tenant_id == tenant_id)
+            .order_by(ExposureSession.updated_at.desc(), ExposureSession.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        total = db.query(ExposureSession.id).filter(ExposureSession.tenant_id == tenant_id).count()
+        return {
+            "tenant_id": tenant_id,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "sessions": [_serialize_exposure_session(row) for row in rows],
+        }
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.post("/api/entity-search/exposure-sessions")
+def create_exposure_session(
+    payload: ExposureSessionCreateRequest,
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        _ensure_exposure_access(db, auth, int(payload.tenant_id))
+        now = datetime.now(timezone.utc)
+        row = ExposureSession(
+            tenant_id=int(payload.tenant_id),
+            title=_exposure_session_title(payload.title),
+            status="open",
+            created_by_user_id=_get_user_id_by_email(db, auth.user_email or ""),
+            created_by_email=auth.user_email,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return _serialize_exposure_session(row)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.get("/api/entity-search/exposure-sessions/{session_id}")
+def get_exposure_session(
+    session_id: int,
+    tenant_id: int = Query(..., ge=1),
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        _ensure_exposure_access(db, auth, tenant_id)
+        row = (
+            db.query(ExposureSession)
+            .filter(ExposureSession.id == session_id, ExposureSession.tenant_id == tenant_id)
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Exposure session not found.")
+        messages = (
+            db.query(ExposureSessionMessage)
+            .filter(ExposureSessionMessage.session_id == session_id)
+            .order_by(ExposureSessionMessage.created_at.asc(), ExposureSessionMessage.id.asc())
+            .all()
+        )
+        interpretations = (
+            db.query(ExposureSessionInterpretation)
+            .filter(ExposureSessionInterpretation.session_id == session_id)
+            .order_by(ExposureSessionInterpretation.created_at.asc(), ExposureSessionInterpretation.id.asc())
+            .all()
+        )
+        return {
+            **_serialize_exposure_session(row),
+            "messages": [_serialize_exposure_session_message(item) for item in messages],
+            "interpretations": [_serialize_exposure_session_interpretation(item) for item in interpretations],
+        }
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
+@app.patch("/api/entity-search/exposure-sessions/{session_id}")
+def update_exposure_session(
+    session_id: int,
+    payload: ExposureSessionUpdateRequest,
+    auth: AuthContext = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        _ensure_exposure_access(db, auth, int(payload.tenant_id))
+        row = (
+            db.query(ExposureSession)
+            .filter(ExposureSession.id == session_id, ExposureSession.tenant_id == int(payload.tenant_id))
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Exposure session not found.")
+        if payload.title is not None:
+            row.title = _exposure_session_title(payload.title)
+        if payload.status is not None:
+            status = payload.status.strip().lower()
+            if status not in {"open", "closed", "archived"}:
+                raise HTTPException(status_code=400, detail="status must be open, closed, or archived.")
+            row.status = status
+        row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+        return _serialize_exposure_session(row)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+
 @app.post("/api/entity-search/exposure-question")
 def entity_search_exposure_question(
     payload: ExposureQuestionRequest,
@@ -7571,20 +8190,27 @@ def entity_search_exposure_question(
     db: Session = Depends(get_db),
 ):
     try:
-        is_platform_admin = _is_platform_admin_user(db, auth.user_email)
-        allowed = is_platform_admin or _user_has_any_tenant_role(
-            db,
-            auth.user_email,
-            payload.tenant_id,
-            ("tenant_investigator", "tenant_admin"),
-        )
-        if not allowed:
-            raise HTTPException(status_code=403, detail="Exposure Search requires tenant_investigator or tenant_admin.")
+        _ensure_exposure_access(db, auth, int(payload.tenant_id))
+        if payload.session_id:
+            session_exists = (
+                db.query(ExposureSession.id)
+                .filter(ExposureSession.id == int(payload.session_id), ExposureSession.tenant_id == int(payload.tenant_id))
+                .first()
+            )
+            if not session_exists:
+                raise HTTPException(status_code=404, detail="Exposure session not found.")
 
         connection = _resolve_tenant_data_hub_connection_or_404(db, payload.tenant_id)
-        question = str(payload.question or "").strip()
-        if not question:
+        original_question = str(payload.question or "").strip()
+        if not original_question:
             raise HTTPException(status_code=400, detail="question is required.")
+        question, effective_filter_overrides, followup_resolution = _resolve_exposure_followup_context(
+            db,
+            payload=payload,
+        )
+        question = str(question or "").strip()
+        if not question:
+            question = original_question
 
         intent_route = _select_exposure_intent_route(question)
         intent_row = intent_route.get("primary_intent") if isinstance(intent_route.get("primary_intent"), dict) else {}
@@ -7616,6 +8242,11 @@ def entity_search_exposure_question(
             "routing_rationale": str(intent_route.get("routing_rationale") or ""),
             "rules_top_candidates": intent_route.get("rules_top_candidates") if isinstance(intent_route.get("rules_top_candidates"), list) else [],
         }
+        _ensure_followup_transaction_step(
+            query_plan,
+            followup_resolution=followup_resolution,
+            hops=int(payload.hops),
+        )
 
         seed_step = _query_plan_step_by_name(query_plan, "seed_search") or {}
         seed_endpoint = str(seed_step.get("endpoint") or "/api/graph/exposure-seed-search")
@@ -7735,7 +8366,7 @@ def entity_search_exposure_question(
                 connection=connection,
                 question=question,
                 base_params=tx_params_template,
-                filter_overrides=payload.filter_overrides,
+                filter_overrides=effective_filter_overrides,
             )
             applied_filters_for_clarification = (
                 tx_mapping_info.get("applied_filters")
@@ -7744,7 +8375,7 @@ def entity_search_exposure_question(
             )
             clarification = (
                 None
-                if isinstance(payload.filter_overrides, dict) and payload.filter_overrides
+                if isinstance(effective_filter_overrides, dict) and effective_filter_overrides
                 else _outside_us_clarification(question, applied_filters_for_clarification)
             )
             interpreted_query = _build_interpreted_query(
@@ -7762,8 +8393,11 @@ def entity_search_exposure_question(
                 }
             )
             if clarification:
-                return {
+                response_data = {
                     "question": question,
+                    "original_question": original_question,
+                    "session_id": int(payload.session_id) if payload.session_id else None,
+                    "followup_resolution": followup_resolution,
                     "intent": intent,
                     "intent_description": intent_description,
                     "intents": [str(row.get("intent") or "") for row in selected_intent_rows],
@@ -7802,7 +8436,64 @@ def entity_search_exposure_question(
                         "recorded_at": datetime.now(timezone.utc).isoformat(),
                     },
                 }
+                _persist_exposure_session_exchange(
+                    db,
+                    session_id=payload.session_id,
+                    tenant_id=int(payload.tenant_id),
+                    auth=auth,
+                    request_payload=payload,
+                    response_data=response_data,
+                )
+                db.commit()
+                return response_data
+            if _is_global_transaction_aggregate_question(question, tx_mapping_info):
+                global_params = dict(normalized_tx_params_base)
+                global_params.pop("node_id", None)
+                global_params["limit"] = 10000
+                tx_payload = _proxy_data_hub_json(
+                    connection,
+                    "/api/graph/exposure/transactions/global",
+                    global_params,
+                )
+                tx_rows = tx_payload.get("rows") if isinstance(tx_payload.get("rows"), list) else []
+                queried_data.append(
+                    {
+                        "step": "global_transaction_details",
+                        "endpoint": "/api/graph/exposure/transactions/global",
+                        "params": global_params,
+                        "result_row_count": int(tx_payload.get("row_count") or 0),
+                    }
+                )
+                transaction_evidence.append(
+                    {
+                        "seed_node_id": None,
+                        "scope": "global",
+                        "row_count": int(tx_payload.get("row_count") or 0),
+                        "summary": tx_payload.get("summary") if isinstance(tx_payload.get("summary"), dict) else {},
+                        "sample_rows": tx_rows[:500] if isinstance(tx_rows, list) else [],
+                        "filter_mapping": tx_mapping_info,
+                    }
+                )
+                if isinstance(interpreted_query, dict):
+                    filters = _interpreted_filters_from_applied(applied_filters_for_clarification)
+                    interpreted_query["subject"] = {}
+                    interpreted_query["filters"] = filters
+                    interpreted_query["natural_language"] = (
+                        "Interpreted as global transaction count; filters "
+                        + ", ".join(
+                            f"{f['dimension']}.{f['field']} {f['operator']} {f['value']}"
+                            for f in filters
+                        )
+                        + "."
+                        if filters
+                        else "Interpreted as global transaction count."
+                    )
+                transaction_linked_node_ids.update(
+                    _transaction_node_ids_from_rows([r for r in tx_rows if isinstance(r, dict)])
+                )
             for seed in tx_seed_candidates[:4]:
+                if transaction_evidence and transaction_evidence[0].get("scope") == "global":
+                    break
                 node_id = str(seed.get("node_id") or "").strip()
                 if not node_id:
                     continue
@@ -7834,7 +8525,7 @@ def entity_search_exposure_question(
                         "seed_node_id": node_id,
                         "row_count": int(tx_payload.get("row_count") or 0),
                         "summary": tx_payload.get("summary") if isinstance(tx_payload.get("summary"), dict) else {},
-                        "sample_rows": tx_rows[:25] if isinstance(tx_rows, list) else [],
+                        "sample_rows": tx_rows[:500] if isinstance(tx_rows, list) else [],
                         "filter_mapping": tx_mapping_info,
                     }
                 )
@@ -7951,10 +8642,50 @@ def entity_search_exposure_question(
             llm_limitations = llm_result.get("limitations") if isinstance(llm_result.get("limitations"), list) else []
             assumptions = [str(v) for v in llm_assumptions if str(v).strip()] or assumptions
             limitations = [str(v) for v in llm_limitations if str(v).strip()] or limitations
+        if transaction_evidence:
+            total_tx_rows = sum(int(row.get("row_count") or 0) for row in transaction_evidence if isinstance(row, dict))
+            total_tx_amount = sum(
+                float(row.get("summary", {}).get("total_amount") or 0)
+                for row in transaction_evidence
+                if isinstance(row, dict) and isinstance(row.get("summary"), dict)
+            )
+            top_jurisdictions: list[str] = []
+            for row in transaction_evidence:
+                summary = row.get("summary") if isinstance(row, dict) else {}
+                if not isinstance(summary, dict):
+                    continue
+                for item in summary.get("top_counterparty_jurisdictions") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    jurisdiction = str(item.get("jurisdiction") or "").strip()
+                    count = int(item.get("txn_count") or 0)
+                    if jurisdiction and count:
+                        top_jurisdictions.append(f"{jurisdiction}:{count}")
+            unique_top_jurisdictions = _merge_unique_strings(top_jurisdictions)[:5]
+            tx_scope = "global transaction search" if any(
+                isinstance(row, dict) and row.get("scope") == "global" for row in transaction_evidence
+            ) else "seed-linked transaction search"
+            filter_bits = _interpreted_filters_from_applied(applied_filters_for_clarification)
+            filter_text = ", ".join(
+                f"{f['dimension']}.{f['field']} {f['operator']} {f['value']}"
+                for f in filter_bits
+            )
+            final_summary = (
+                f"{tx_scope.title()} returned {total_tx_rows} transaction row(s)"
+                f" with total amount {total_tx_amount:,.2f}."
+            )
+            if filter_text:
+                final_summary += f" Applied filters: {filter_text}."
+            if unique_top_jurisdictions:
+                final_summary += f" Top counterparty jurisdictions: {', '.join(unique_top_jurisdictions)}."
+            relevance_explanation = [
+                "Transaction detail evidence was retrieved from the cash fact data for the interpreted filters."
+            ] + deterministic_findings
 
         audit_payload = {
             "tenant_id": int(payload.tenant_id),
             "question": question,
+            "original_question": original_question,
             "intent": intent,
             "mode": mode,
             "query_plan": query_plan,
@@ -7964,6 +8695,7 @@ def entity_search_exposure_question(
             "intent_routing": query_plan.get("intent_routing"),
             "transaction_filter_mapping": tx_mapping_info,
             "interpreted_query": interpreted_query,
+            "followup_resolution": followup_resolution,
             "enriched_transaction_nodes": enriched_transaction_nodes,
             "seed_selection": {
                 "graph_seed_candidates": [str(row.get("node_id") or "") for row in graph_seed_candidates[:10]],
@@ -7983,10 +8715,11 @@ def entity_search_exposure_question(
             request=request,
             payload=audit_payload,
         )
-        db.commit()
-
-        return {
+        response_data = {
             "question": question,
+            "original_question": original_question,
+            "session_id": int(payload.session_id) if payload.session_id else None,
+            "followup_resolution": followup_resolution,
             "intent": intent,
             "intent_description": intent_description,
             "intents": [str(row.get("intent") or "") for row in selected_intent_rows],
@@ -8019,6 +8752,17 @@ def entity_search_exposure_question(
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
             },
         }
+        _persist_exposure_session_exchange(
+            db,
+            session_id=payload.session_id,
+            tenant_id=int(payload.tenant_id),
+            auth=auth,
+            request_payload=payload,
+            response_data=response_data,
+        )
+        db.commit()
+
+        return response_data
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")

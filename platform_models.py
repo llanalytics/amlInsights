@@ -99,6 +99,52 @@ class TenantDataHubConnection(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ExposureSession(Base):
+    __tablename__ = "exp_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("ten_tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("auth_users.id"), index=True)
+    created_by_email: Mapped[str | None] = mapped_column(String(255), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ExposureSessionMessage(Base):
+    __tablename__ = "exp_session_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("exp_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_json: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("auth_users.id"), index=True)
+    created_by_email: Mapped[str | None] = mapped_column(String(255), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ExposureSessionInterpretation(Base):
+    __tablename__ = "exp_session_interpretations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("exp_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    message_id: Mapped[int | None] = mapped_column(ForeignKey("exp_session_messages.id", ondelete="SET NULL"), index=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(64), index=True)
+    mode: Mapped[str | None] = mapped_column(String(64))
+    intent: Mapped[str | None] = mapped_column(String(128), index=True)
+    interpretation_json: Mapped[str | None] = mapped_column(Text)
+    query_plan_json: Mapped[str | None] = mapped_column(Text)
+    transaction_filter_mapping_json: Mapped[str | None] = mapped_column(Text)
+    response_summary: Mapped[str | None] = mapped_column(Text)
+    response_payload_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class WorkflowDefinition(Base):
     __tablename__ = "wf_definitions"
     __table_args__ = (UniqueConstraint("module_code", "entity_type", "tenant_id", name="uq_workflow_definitions_scope"),)
