@@ -24,6 +24,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
 from auth import hash_password, needs_rehash, verify_password
+from country_resolution import iter_country_aliases
 from database import DB_SCHEMA, SessionLocal, engine
 from models import User
 from platform_auth import (
@@ -553,6 +554,93 @@ def _exposure_question_terms(question: str) -> list[str]:
     return out[:16]
 
 
+_EXPOSURE_ENTITY_INTRO_PATTERNS: tuple[str, ...] = (
+    r"associated\s+with",
+    r"related\s+to",
+    r"connected\s+to",
+    r"linked\s+to",
+    r"involving",
+    r"regarding",
+    r"about",
+    r"around",
+    r"for",
+    r"on",
+)
+_EXPOSURE_ORG_SUFFIX_PATTERN = re.compile(
+    r"\b(?:[A-Za-z0-9&.'-]+\s+){0,8}(?:LIMITED|LTD|LLC|INC|CORP|CORPORATION|COMPANY|CO|PLC|SA|AG|GMBH|LP|LLP)\b",
+    re.IGNORECASE,
+)
+_EXPOSURE_ENTITY_TRAILING_STOP_PATTERN = re.compile(
+    r"\b(?:and|with|where|that|which|who|having|including|from|to|outside|inside|negative\s+news|adverse\s+media|transactions?|payments?|wires?)\b",
+    re.IGNORECASE,
+)
+
+
+def _clean_exposure_entity_seed_query(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" .,:;!?\"'`"))
+    if not text:
+        return ""
+    stop_match = _EXPOSURE_ENTITY_TRAILING_STOP_PATTERN.search(text)
+    if stop_match and stop_match.start() > 0:
+        text = text[: stop_match.start()].strip(" .,:;!?\"'`")
+    return text
+
+
+def _clean_exposure_org_seed_query(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" .,:;!?\"'`"))
+    if not text:
+        return ""
+    markers = (
+        r"associated\s+with",
+        r"related\s+to",
+        r"connected\s+to",
+        r"linked\s+to",
+        r"involving",
+        r"regarding",
+        r"about",
+        r"around",
+        r"for",
+        r"on",
+    )
+    for marker in markers:
+        matches = list(re.finditer(rf"\b{marker}\b\s+", text, flags=re.IGNORECASE))
+        if matches:
+            text = text[matches[-1].end() :].strip(" .,:;!?\"'`")
+            break
+    text = re.sub(
+        r"^(?:search|find|show|look|looking|negative|news|adverse|media|exposure|associated|related)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip(" .,:;!?\"'`")
+    return _clean_exposure_entity_seed_query(text)
+
+
+def _exposure_seed_query_from_question(question: str) -> str:
+    raw = str(question or "").strip()
+    if not raw:
+        return ""
+    candidates: list[str] = []
+    org_candidates: list[str] = []
+    for match in _EXPOSURE_ORG_SUFFIX_PATTERN.finditer(raw):
+        clean = _clean_exposure_org_seed_query(match.group(0))
+        if clean:
+            org_candidates.append(clean)
+    if org_candidates:
+        org_candidates.sort(key=lambda v: (len(v.split()), len(v)), reverse=True)
+        return org_candidates[0]
+    for intro in _EXPOSURE_ENTITY_INTRO_PATTERNS:
+        match = re.search(rf"\b{intro}\b\s+(.+)$", raw, flags=re.IGNORECASE)
+        if match:
+            clean = _clean_exposure_entity_seed_query(match.group(1))
+            if clean:
+                candidates.append(clean)
+    if not candidates:
+        return raw
+    candidates.sort(key=lambda v: (len(v.split()), len(v)), reverse=True)
+    return candidates[0]
+
+
 def _load_exposure_intents_library() -> dict[str, object]:
     path = Path(EXPOSURE_INTENTS_CONFIG_PATH)
     if not path.is_absolute():
@@ -867,25 +955,6 @@ _TX_MECHANISM_SYNONYMS: dict[str, set[str]] = {
     "branch": {"branch", "teller"},
     "atm": {"atm", "cash machine"},
 }
-_COUNTRY_NAME_TO_CODE_2 = {
-    "france": "FR",
-    "french republic": "FR",
-    "united states": "US",
-    "usa": "US",
-    "us": "US",
-    "u.s.": "US",
-    "panama": "PA",
-    "japan": "JP",
-    "china": "CN",
-    "canada": "CA",
-    "united kingdom": "GB",
-    "uk": "GB",
-    "germany": "DE",
-    "spain": "ES",
-    "italy": "IT",
-    "mexico": "MX",
-}
-
 
 def _openai_exposure_filter_mapper_enabled() -> bool:
     return bool(OPENAI_EXPOSURE_FILTER_MAPPER_ENABLED and OPENAI_API_KEY and OPENAI_MODEL)
@@ -928,7 +997,7 @@ def _deterministic_transaction_filter_mapping(
             confidence += 0.4
             break
 
-    for country_name, country_code in _COUNTRY_NAME_TO_CODE_2.items():
+    for country_name, country_code in iter_country_aliases():
         if country_code not in {v.upper() for v in _catalog_list_values(catalog, "counterparty_jurisdictions")}:
             continue
         escaped = re.escape(country_name)
@@ -938,10 +1007,26 @@ def _deterministic_transaction_filter_mapping(
             reasons.append(f"Mapped destination country `{country_name}` to counterparty_jurisdiction `{country_code}`.")
             confidence += 0.6
             break
+        if re.search(
+            rf"\b(counterparty|counterparties|beneficiary|beneficiaries|recipient|recipients)\s+"
+            rf"(in|within|located\s+in|based\s+in|domiciled\s+in)\s+(the\s+)?{escaped}\b",
+            q,
+        ):
+            mapped["counterparty_jurisdiction"] = country_code
+            if any(term in q for term in ("sent", "send", "sends", "sending", "to counterparty", "to counterparties")):
+                mapped.setdefault("direction", directions.get("outbound", "outbound"))
+            reasons.append(f"Mapped counterparty country phrase `{country_name}` to counterparty_jurisdiction `{country_code}`.")
+            confidence += 0.6
+            break
         if re.search(rf"\b(from)\s+(the\s+)?{escaped}\b", q):
             mapped["counterparty_jurisdiction"] = country_code
             mapped.setdefault("direction", directions.get("inbound", "inbound"))
             reasons.append(f"Mapped origin country `{country_name}` to counterparty_jurisdiction `{country_code}`.")
+            confidence += 0.6
+            break
+        if re.search(rf"\b{escaped}\s+nexus\b", q) or re.search(rf"\bnexus\s+(to|with|in|within)\s+(the\s+)?{escaped}\b", q):
+            mapped["counterparty_jurisdiction"] = country_code
+            reasons.append(f"Mapped country nexus phrase `{country_name}` to counterparty_jurisdiction `{country_code}`.")
             confidence += 0.6
             break
 
@@ -1101,6 +1186,15 @@ def _outside_us_phrase_present(question: str) -> bool:
     return any(term in q for term in ("outside us", "outside the us", "non-us", "non us", "outside united states"))
 
 
+def _has_explicit_exposure_subject(question: str) -> bool:
+    q = str(question or "").strip().lower()
+    if re.search(r"\bexposure\s+(for|around|about|of|on|involving|related\s+to|associated\s+with|connected\s+to|linked\s+to)\b", q):
+        return True
+    if re.search(r"\b(for|around|about|of|on|involving|related\s+to|associated\s+with|connected\s+to|linked\s+to)\s+.+\b(limited|ltd|corp|corporation|inc|llc|bank|trading)\b", q):
+        return True
+    return False
+
+
 def _outside_us_dimension_hints(question: str) -> list[str]:
     q = str(question or "").lower()
     dimension_words = {
@@ -1114,6 +1208,17 @@ def _outside_us_dimension_hints(question: str) -> list[str]:
         for dimension, words in dimension_words.items()
         if any(word in q for word in words)
     ]
+
+
+def _counterparty_country_nexus_question(question: str) -> bool:
+    q = str(question or "").lower()
+    if not re.search(r"\b(counterparty|counterparties|beneficiary|beneficiaries|recipient|recipients)\b", q):
+        return False
+    for country_name, _country_code in iter_country_aliases():
+        escaped = re.escape(country_name)
+        if re.search(rf"\b{escaped}\s+nexus\b", q) or re.search(rf"\bnexus\s+(to|with|in|within)\s+(the\s+)?{escaped}\b", q):
+            return True
+    return False
 
 
 def _outside_us_clarification(question: str, applied_filters: dict[str, object]) -> dict[str, object] | None:
@@ -1259,14 +1364,23 @@ def _normalize_transaction_filters_for_question(
     question: str,
     base_params: dict[str, object],
     filter_overrides: dict[str, object] | None = None,
+    capabilities: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    catalog = _proxy_data_hub_json(connection, "/api/graph/transaction-filter-catalog", {})
+    capabilities = capabilities if isinstance(capabilities, dict) else _get_data_hub_capabilities(connection)
+    catalog = _transaction_filter_catalog_from_capabilities(capabilities)
+    if not catalog:
+        catalog = _proxy_data_hub_json(connection, "/api/graph/transaction-filter-catalog", {})
     deterministic_filters, deterministic_confidence, deterministic_reasons = _deterministic_transaction_filter_mapping(
         question,
         catalog,
     )
     normalized = dict(base_params)
-    deterministic_valid = _validate_transaction_filter_mapping(deterministic_filters, catalog)
+    normalized, dropped_unsupported_base = _filter_supported_transaction_filters(normalized, capabilities)
+    deterministic_valid_raw = _validate_transaction_filter_mapping(deterministic_filters, catalog)
+    deterministic_valid, dropped_unsupported_deterministic = _filter_supported_transaction_filters(
+        deterministic_valid_raw,
+        capabilities,
+    )
     has_filter_overrides = isinstance(filter_overrides, dict) and bool(filter_overrides)
     ambiguous_outside_us = (
         _outside_us_phrase_present(question)
@@ -1275,6 +1389,25 @@ def _normalize_transaction_filters_for_question(
     )
     if ambiguous_outside_us:
         normalized.pop("outside_country_code_2", None)
+    filter_overrides_input = filter_overrides if isinstance(filter_overrides, dict) else {}
+    if (
+        "outside_country_code_2" in normalized
+        and not _outside_us_phrase_present(question)
+        and not filter_overrides_input.get("outside_country_code_2")
+    ):
+        normalized.pop("outside_country_code_2", None)
+    if (
+        "mechanism_contains" in normalized
+        and "mechanism_contains" not in deterministic_valid
+        and not filter_overrides_input.get("mechanism_contains")
+    ):
+        normalized.pop("mechanism_contains", None)
+    if (
+        "direction" in normalized
+        and "direction" not in deterministic_valid
+        and not filter_overrides_input.get("direction")
+    ):
+        normalized.pop("direction", None)
     normalized.update(deterministic_valid)
     if (
         ("outside_counterparty_jurisdiction" in deterministic_valid or "counterparty_jurisdiction" in deterministic_valid)
@@ -1285,9 +1418,13 @@ def _normalize_transaction_filters_for_question(
         normalized.pop("outside_country_code_2", None)
     if "outside_branch_country_code" in deterministic_valid and "outside_country_code_2" in normalized:
         normalized.pop("outside_country_code_2", None)
-    override_filters = _validate_transaction_filter_mapping(
-        filter_overrides if isinstance(filter_overrides, dict) else {},
+    override_filters_raw = _validate_transaction_filter_mapping(
+        filter_overrides_input,
         catalog,
+    )
+    override_filters, dropped_unsupported_overrides = _filter_supported_transaction_filters(
+        override_filters_raw,
+        capabilities,
     )
     if override_filters:
         normalized.update(override_filters)
@@ -1301,6 +1438,13 @@ def _normalize_transaction_filters_for_question(
             )
         ):
             normalized.pop("outside_country_code_2", None)
+        if (
+            ("outside_counterparty_jurisdiction" in deterministic_valid or "counterparty_jurisdiction" in deterministic_valid)
+            and "outside_country_code_2" in normalized
+        ):
+            normalized.pop("outside_country_code_2", None)
+        if "counterparty_jurisdiction" in deterministic_valid and "outside_counterparty_jurisdiction" in normalized:
+            normalized.pop("outside_counterparty_jurisdiction", None)
     mode = "deterministic"
     confidence = deterministic_confidence
     rationale = "; ".join(deterministic_reasons)
@@ -1313,10 +1457,11 @@ def _normalize_transaction_filters_for_question(
             deterministic_reasons=deterministic_reasons,
         )
         if llm:
-            llm_filters = _validate_transaction_filter_mapping(
+            llm_filters_raw = _validate_transaction_filter_mapping(
                 llm.get("filters") if isinstance(llm.get("filters"), dict) else {},
                 catalog,
             )
+            llm_filters, dropped_unsupported_llm = _filter_supported_transaction_filters(llm_filters_raw, capabilities)
             if llm_filters:
                 normalized.update(llm_filters)
                 if (
@@ -1331,11 +1476,23 @@ def _normalize_transaction_filters_for_question(
                 mode = "openai_mapper"
                 confidence = max(confidence, float(llm.get("confidence") or 0.0))
                 rationale = str(llm.get("rationale") or rationale)
+        else:
+            dropped_unsupported_llm = {}
+    else:
+        dropped_unsupported_llm = {}
 
     mapping_info = {
         "mode": mode,
         "confidence": max(0.0, min(1.0, confidence)),
         "rationale": rationale,
+        "data_hub_capabilities_version": str(capabilities.get("version") or "") if isinstance(capabilities, dict) else "",
+        "supported_filters": sorted(_capability_transaction_filter_parameters(capabilities)),
+        "dropped_unsupported_filters": {
+            "base": dropped_unsupported_base,
+            "deterministic": dropped_unsupported_deterministic,
+            "overrides": dropped_unsupported_overrides,
+            "openai_mapper": dropped_unsupported_llm,
+        },
         "deterministic_filters": deterministic_filters,
         "override_filters": override_filters,
         "applied_filters": {
@@ -1415,24 +1572,23 @@ def _query_plan_step_by_name(query_plan: dict[str, object], step_name: str) -> d
     return None
 
 
-def _ensure_followup_transaction_step(
-    query_plan: dict[str, object],
-    *,
-    followup_resolution: dict[str, object] | None,
-    hops: int,
-) -> None:
-    if not followup_resolution:
-        return
-    inherited = followup_resolution.get("inherited_filter_overrides")
-    if not isinstance(inherited, dict) or not inherited:
-        return
-    if _query_plan_step_by_name(query_plan, "transaction_details"):
-        return
+def _remove_query_plan_steps(query_plan: dict[str, object], step_names: set[str]) -> None:
     steps = query_plan.get("steps")
     if not isinstance(steps, list):
-        steps = []
-        query_plan["steps"] = steps
-    params = {
+        return
+    filtered_steps = [
+        step
+        for step in steps
+        if not (isinstance(step, dict) and str(step.get("name") or "").strip() in step_names)
+    ]
+    for idx, step in enumerate(filtered_steps, start=1):
+        if isinstance(step, dict):
+            step["step"] = idx
+    query_plan["steps"] = filtered_steps
+
+
+def _transaction_step_params_from_filters(filters: dict[str, object], hops: int) -> dict[str, object]:
+    params: dict[str, object] = {
         "hops": str(max(1, int(hops))),
         "limit": "200",
     }
@@ -1448,26 +1604,71 @@ def _ensure_followup_transaction_step(
         "outside_branch_country_code",
         "branch_country_code",
     ):
-        value = inherited.get(key)
+        value = filters.get(key)
         if value is not None and value != "":
             params[key] = value
+    return params
+
+
+def _ensure_transaction_step_for_filters(
+    query_plan: dict[str, object],
+    *,
+    filters: dict[str, object] | None,
+    hops: int,
+    notes: str,
+) -> None:
+    if not isinstance(filters, dict) or not filters:
+        return
+    if _query_plan_step_by_name(query_plan, "transaction_details"):
+        return
+    steps = query_plan.get("steps")
+    if not isinstance(steps, list):
+        steps = []
+        query_plan["steps"] = steps
     steps.append(
         {
             "step": len(steps) + 1,
             "name": "transaction_details",
             "query_type": "cash_fact_transaction_retrieval",
             "endpoint": "/api/graph/exposure/transactions",
-            "params": params,
-            "notes": "Added from prior session context for a follow-up question.",
+            "params": _transaction_step_params_from_filters(filters, hops),
+            "notes": notes,
         }
+    )
+
+
+def _clean_query_plan_params(params: dict[str, object]) -> dict[str, object]:
+    return {
+        str(key): value
+        for key, value in params.items()
+        if value is not None and value != ""
+    }
+
+
+def _ensure_followup_transaction_step(
+    query_plan: dict[str, object],
+    *,
+    followup_resolution: dict[str, object] | None,
+    hops: int,
+) -> None:
+    if not followup_resolution:
+        return
+    inherited = followup_resolution.get("inherited_filter_overrides")
+    if not isinstance(inherited, dict) or not inherited:
+        return
+    _ensure_transaction_step_for_filters(
+        query_plan,
+        filters=inherited,
+        hops=hops,
+        notes="Added from prior session context for a follow-up question.",
     )
 
 
 def _is_global_transaction_aggregate_question(question: str, tx_mapping_info: dict[str, object] | None) -> bool:
     q = str(question or "").strip().lower()
-    if not re.search(r"\b(wire|wires|payment|payments|transfer|transfers|transactions)\b", q):
+    if not re.search(r"\b(wire|wires|payment|payments|transfer|transfers|transaction|transactions|counterparty|counterparties|beneficiary|beneficiaries|recipient|recipients)\b", q):
         return False
-    if not re.search(r"\b(how many|count|total number|number of|find|show|list|get)\b", q):
+    if not re.search(r"\b(how many|count|total number|number of|find|show|list|get|all|any|expand|looking for)\b", q):
         return False
     applied = (
         tx_mapping_info.get("applied_filters")
@@ -1569,8 +1770,242 @@ def _transaction_node_ids_from_rows(rows: list[dict[str, object]]) -> set[str]:
         counterparty_key = str(row.get("counterparty_account_key") or "").strip()
         if account_key:
             out.add(f"Account:{account_key}")
-        if counterparty_key:
+        if counterparty_key and counterparty_key.upper() != "NA":
             out.add(f"CounterpartyAccount:{counterparty_key}")
+    return out
+
+
+def _float_amount(value: object) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _update_transaction_graph_node_stats(
+    stats: dict[str, dict[str, object]],
+    rows: list[dict[str, object]],
+) -> None:
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        amount = abs(_float_amount(row.get("amount")))
+        counterparty_key = str(row.get("counterparty_account_key") or "").strip()
+        if counterparty_key and counterparty_key.upper() != "NA":
+            node_id = f"CounterpartyAccount:{counterparty_key}"
+            label = str(row.get("counterparty_name") or counterparty_key).strip()
+            node_type = "CounterpartyAccount"
+        else:
+            account_key = str(row.get("account_key") or "").strip()
+            if not account_key:
+                continue
+            node_id = f"Account:{account_key}"
+            label = account_key
+            node_type = "Account"
+        current = stats.setdefault(
+            node_id,
+            {
+                "node_id": node_id,
+                "node_type": node_type,
+                "label": label or node_id,
+                "total_amount": 0.0,
+                "transaction_count": 0,
+            },
+        )
+        if label and str(current.get("label") or "") == node_id:
+            current["label"] = label
+        current["total_amount"] = _float_amount(current.get("total_amount")) + amount
+        current["transaction_count"] = int(current.get("transaction_count") or 0) + 1
+
+
+def _rank_transaction_graph_nodes(stats: dict[str, dict[str, object]]) -> list[dict[str, object]]:
+    rows = [dict(v) for v in stats.values() if isinstance(v, dict) and str(v.get("node_id") or "").strip()]
+
+    def sort_key(row: dict[str, object]) -> tuple[int, float, int, str]:
+        node_type = str(row.get("node_type") or "")
+        type_rank = 0 if node_type == "CounterpartyAccount" else 1
+        return (
+            type_rank,
+            -_float_amount(row.get("total_amount")),
+            -int(row.get("transaction_count") or 0),
+            str(row.get("label") or row.get("node_id") or ""),
+        )
+
+    return sorted(rows, key=sort_key)
+
+
+def _transaction_graph_enrichment_plan(
+    stats: dict[str, dict[str, object]],
+    existing_node_ids: set[str],
+    limit: int = 4,
+) -> dict[str, object]:
+    ranked = _rank_transaction_graph_nodes(stats)
+    counterparties = [row for row in ranked if str(row.get("node_type") or "") == "CounterpartyAccount"]
+    fallback = ranked if not counterparties else counterparties
+    selected = fallback[: max(1, int(limit))]
+    deferred = [row for row in fallback if str(row.get("node_id") or "") not in {str(s.get("node_id") or "") for s in selected}]
+    selected_node_ids = {str(row.get("node_id") or "") for row in selected}
+    deferred_node_ids = {str(row.get("node_id") or "") for row in deferred}
+    return {
+        "ranked_nodes": ranked,
+        "selected_nodes": selected,
+        "deferred_nodes": deferred,
+        "selected_node_ids": sorted(v for v in selected_node_ids if v),
+        "deferred_node_ids": sorted(v for v in deferred_node_ids if v),
+        "already_visible_selected_node_ids": sorted(v for v in selected_node_ids.intersection(existing_node_ids) if v),
+        "candidate_count": len(ranked),
+        "selected_count": len(selected),
+        "deferred_count": len(deferred),
+        "selection_limit": max(1, int(limit)),
+        "ranking_basis": "absolute transaction amount",
+    }
+
+
+def _prune_transaction_counterparties_from_graph(
+    graph_payload: dict[str, object] | None,
+    keep_counterparty_node_ids: set[str],
+    deferred_node_ids: set[str],
+) -> dict[str, object] | None:
+    if not graph_payload or not keep_counterparty_node_ids:
+        return graph_payload
+    elements = graph_payload.get("elements") if isinstance(graph_payload.get("elements"), dict) else {}
+    nodes = elements.get("nodes") if isinstance(elements.get("nodes"), list) else []
+    edges = elements.get("edges") if isinstance(elements.get("edges"), list) else []
+    kept_nodes: list[dict[str, object]] = []
+    kept_node_ids: set[str] = set()
+    node_type_by_id: dict[str, str] = {}
+    removed_counterparty_node_ids: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        node_id = str(data.get("id") or "").strip()
+        node_type = str(data.get("node_type") or "").strip()
+        if not node_id:
+            continue
+        node_type_by_id[node_id] = node_type
+        if node_type == "CounterpartyAccount" and node_id not in keep_counterparty_node_ids:
+            removed_counterparty_node_ids.add(node_id)
+            continue
+        kept_nodes.append(node)
+        kept_node_ids.add(node_id)
+    kept_edges: list[dict[str, object]] = []
+    removed_counterparty_edges: list[dict[str, object]] = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+        source = str(data.get("source") or "").strip()
+        target = str(data.get("target") or "").strip()
+        if not source or not target:
+            continue
+        if source in removed_counterparty_node_ids or target in removed_counterparty_node_ids:
+            removed_counterparty_edges.append(edge)
+            continue
+        if source not in kept_node_ids or target not in kept_node_ids:
+            continue
+        kept_edges.append(edge)
+    aggregate_id = "__counterparty_remainder__"
+    aggregate_anchor_ids: set[str] = set()
+    aggregate_amount = 0.0
+    if removed_counterparty_node_ids:
+        for edge in removed_counterparty_edges:
+            data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+            source = str(data.get("source") or "").strip()
+            target = str(data.get("target") or "").strip()
+            if source in removed_counterparty_node_ids:
+                other = target
+            elif target in removed_counterparty_node_ids:
+                other = source
+            else:
+                other = ""
+            if other in kept_node_ids and node_type_by_id.get(other) in {"Account", "Customer"}:
+                aggregate_anchor_ids.add(other)
+            aggregate_amount += abs(_float_amount(data.get("total_amount") or data.get("amount")))
+        if not aggregate_anchor_ids:
+            aggregate_anchor_ids = {
+                node_id
+                for node_id in kept_node_ids
+                if node_type_by_id.get(node_id) in {"Account", "Customer"}
+            }
+    if removed_counterparty_node_ids and aggregate_anchor_ids:
+        aggregate_count = len(removed_counterparty_node_ids)
+        kept_nodes.append(
+            {
+                "data": {
+                    "id": aggregate_id,
+                    "node_type": "CounterpartyRemainder",
+                    "label": f"Other counterparties ({aggregate_count})",
+                    "hidden_counterparty_count": aggregate_count,
+                    "deferred_transaction_counterparty_count": len(deferred_node_ids),
+                    "total_amount": aggregate_amount,
+                    "degree_total": aggregate_count,
+                    "aggregate_counterparties": True,
+                }
+            }
+        )
+        kept_node_ids.add(aggregate_id)
+        node_type_by_id[aggregate_id] = "CounterpartyRemainder"
+        for anchor_id in sorted(aggregate_anchor_ids):
+            kept_edges.append(
+                {
+                    "data": {
+                        "id": f"{anchor_id}|COUNTERPARTY_REMAINDER|{aggregate_id}",
+                        "source": anchor_id,
+                        "target": aggregate_id,
+                        "edge_type": "COUNTERPARTY_REMAINDER",
+                        "label": f"{aggregate_count} other counterparties",
+                        "hidden_counterparty_count": aggregate_count,
+                        "deferred_transaction_counterparty_count": len(deferred_node_ids),
+                        "total_amount": aggregate_amount,
+                    }
+                }
+            )
+    connected_kept_node_ids: set[str] = set()
+    for edge in kept_edges:
+        data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+        source = str(data.get("source") or "").strip()
+        target = str(data.get("target") or "").strip()
+        if source:
+            connected_kept_node_ids.add(source)
+        if target:
+            connected_kept_node_ids.add(target)
+    surrogate_node_types = {"SurrogateName", "SurrogateAddress", "SurrogateNameAddress"}
+    final_nodes: list[dict[str, object]] = []
+    final_node_ids: set[str] = set()
+    for node in kept_nodes:
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        node_id = str(data.get("id") or "").strip()
+        node_type = str(data.get("node_type") or "").strip()
+        if not node_id:
+            continue
+        if node_type in surrogate_node_types and node_id not in connected_kept_node_ids:
+            continue
+        final_nodes.append(node)
+        final_node_ids.add(node_id)
+    final_edges = [
+        edge
+        for edge in kept_edges
+        if (
+            isinstance(edge, dict)
+            and isinstance(edge.get("data"), dict)
+            and str(edge["data"].get("source") or "") in final_node_ids
+            and str(edge["data"].get("target") or "") in final_node_ids
+        )
+    ]
+    out = dict(graph_payload)
+    out["elements"] = {"nodes": final_nodes, "edges": final_edges}
+    out["node_count"] = len(final_nodes)
+    out["edge_count"] = len(final_edges)
+    out["transaction_counterparty_pruning"] = {
+        "kept_counterparty_node_ids": sorted(keep_counterparty_node_ids),
+        "removed_counterparty_node_count": len(removed_counterparty_node_ids),
+        "removed_counterparty_node_ids": sorted(removed_counterparty_node_ids),
+        "aggregate_node_id": aggregate_id if removed_counterparty_node_ids and aggregate_anchor_ids else "",
+        "aggregate_anchor_node_ids": sorted(aggregate_anchor_ids),
+        "deferred_node_count": len(deferred_node_ids),
+        "deferred_node_ids": sorted(deferred_node_ids),
+    }
     return out
 
 
@@ -4481,6 +4916,87 @@ def _proxy_data_hub_json(
         raise HTTPException(status_code=502, detail=f"Data Hub connection error: {exc.reason}")
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="Data Hub returned invalid JSON.")
+
+
+def _get_data_hub_capabilities(connection: TenantDataHubConnection) -> dict[str, object]:
+    try:
+        return _proxy_data_hub_json(connection, "/api/graph/capabilities", {})
+    except HTTPException:
+        return {}
+
+
+def _capability_supports_global_transactions(capabilities: dict[str, object] | None) -> bool:
+    if not isinstance(capabilities, dict) or not capabilities:
+        return True
+    transactions = capabilities.get("transactions") if isinstance(capabilities.get("transactions"), dict) else {}
+    global_search = (
+        transactions.get("global_transaction_search")
+        if isinstance(transactions.get("global_transaction_search"), dict)
+        else {}
+    )
+    if not global_search:
+        return True
+    return bool(global_search.get("supported"))
+
+
+def _capability_transaction_filter_parameters(capabilities: dict[str, object] | None) -> set[str]:
+    if not isinstance(capabilities, dict) or not capabilities:
+        return set()
+    transactions = capabilities.get("transactions") if isinstance(capabilities.get("transactions"), dict) else {}
+    filters = transactions.get("filters") if isinstance(transactions.get("filters"), list) else []
+    out = {
+        str(item.get("parameter") or "").strip()
+        for item in filters
+        if isinstance(item, dict) and str(item.get("parameter") or "").strip()
+    }
+    if out:
+        return out
+    for key in ("global_transaction_search", "seeded_transaction_search"):
+        entry = transactions.get(key) if isinstance(transactions.get(key), dict) else {}
+        supported = entry.get("supported_filters") if isinstance(entry.get("supported_filters"), list) else []
+        out.update(str(v).strip() for v in supported if str(v).strip())
+    return out
+
+
+def _capability_seed_node_types(capabilities: dict[str, object] | None) -> set[str]:
+    if not isinstance(capabilities, dict) or not capabilities:
+        return {"Customer", "Account", "CounterpartyAccount"}
+    transactions = capabilities.get("transactions") if isinstance(capabilities.get("transactions"), dict) else {}
+    seeded = (
+        transactions.get("seeded_transaction_search")
+        if isinstance(transactions.get("seeded_transaction_search"), dict)
+        else {}
+    )
+    values = seeded.get("seed_node_types") if isinstance(seeded.get("seed_node_types"), list) else []
+    out = {str(v).strip() for v in values if str(v).strip()}
+    return out or {"Customer", "Account", "CounterpartyAccount"}
+
+
+def _transaction_filter_catalog_from_capabilities(capabilities: dict[str, object] | None) -> dict[str, object]:
+    if not isinstance(capabilities, dict):
+        return {}
+    transactions = capabilities.get("transactions") if isinstance(capabilities.get("transactions"), dict) else {}
+    vocab = transactions.get("vocabularies") if isinstance(transactions.get("vocabularies"), dict) else {}
+    return dict(vocab) if vocab else {}
+
+
+def _filter_supported_transaction_filters(
+    filters: dict[str, object],
+    capabilities: dict[str, object] | None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    supported = _capability_transaction_filter_parameters(capabilities)
+    if not supported:
+        return dict(filters), {}
+    kept: dict[str, object] = {}
+    dropped: dict[str, object] = {}
+    for key, value in filters.items():
+        if key not in _FILTER_INTERPRETATION_LABELS:
+            kept[key] = value
+        elif key in supported:
+            kept[key] = value
+        else:
+            dropped[key] = value
+    return kept, dropped
 
 
 def _accessible_tenants_for_user(db: Session, user_email: str, is_platform_admin: bool) -> list[Tenant]:
@@ -7796,10 +8312,12 @@ def _looks_like_followup(question: str) -> bool:
         "instead ",
         "rerun ",
         "make it ",
+        "let's ",
+        "lets ",
     )
     if q.startswith(starters):
         return True
-    return bool(re.search(r"\b(same|that|those|this|it|instead|narrow|exclude|include)\b", q))
+    return bool(re.search(r"\b(same|those|this|it|instead|narrow|exclude|include)\b", q))
 
 
 def _clear_geo_filters(filters: dict[str, object]) -> None:
@@ -7818,6 +8336,16 @@ def _clear_geo_filters(filters: dict[str, object]) -> None:
 def _followup_filter_overrides(question: str, prior_filters: dict[str, object]) -> dict[str, object]:
     q = str(question or "").lower()
     out = dict(prior_filters)
+    broad_transaction_request = bool(
+        re.search(r"\b(any|all)\s+transactions?\b", q)
+        or re.search(r"\bexpand\b.*\btransactions?\b", q)
+    )
+
+    if broad_transaction_request:
+        out.pop("mechanism_contains", None)
+        out.pop("aml_classification_contains", None)
+        if not any(term in q for term in ("sent", "send", "sends", "sending", "outbound", "outgoing", "received", "inbound", "incoming")):
+            out.pop("direction", None)
 
     if "wire" in q or "wires" in q:
         out["mechanism_contains"] = "wire"
@@ -7854,6 +8382,24 @@ def _followup_filter_overrides(question: str, prior_filters: dict[str, object]) 
     if ("switch" in q or "change" in q) and "branch countr" in q:
         _clear_geo_filters(out)
         out["outside_branch_country_code"] = "US"
+
+    for country_name, country_code in iter_country_aliases():
+        escaped = re.escape(country_name)
+        if re.search(
+            rf"\b(counterparty|counterparties|beneficiary|beneficiaries|recipient|recipients)\s+"
+            rf"(in|within|located\s+in|based\s+in|domiciled\s+in)\s+(the\s+)?{escaped}\b",
+            q,
+        ) or re.search(rf"\b(to|toward|towards|into)\s+(the\s+)?{escaped}\b", q):
+            _clear_geo_filters(out)
+            out["counterparty_jurisdiction"] = country_code
+            if any(term in q for term in ("sent", "send", "sends", "sending", "to counterparty", "to counterparties")):
+                out["direction"] = "outbound"
+            break
+        if re.search(rf"\bfrom\s+(the\s+)?{escaped}\b", q):
+            _clear_geo_filters(out)
+            out["counterparty_jurisdiction"] = country_code
+            out["direction"] = "inbound"
+            break
 
     return out
 
@@ -8201,6 +8747,7 @@ def entity_search_exposure_question(
                 raise HTTPException(status_code=404, detail="Exposure session not found.")
 
         connection = _resolve_tenant_data_hub_connection_or_404(db, payload.tenant_id)
+        data_hub_capabilities = _get_data_hub_capabilities(connection)
         original_question = str(payload.question or "").strip()
         if not original_question:
             raise HTTPException(status_code=400, detail="question is required.")
@@ -8247,6 +8794,78 @@ def entity_search_exposure_question(
             followup_resolution=followup_resolution,
             hops=int(payload.hops),
         )
+        _ensure_transaction_step_for_filters(
+            query_plan,
+            filters=effective_filter_overrides if isinstance(effective_filter_overrides, dict) else None,
+            hops=int(payload.hops),
+            notes="Added from an explicit clarification or structured filter override.",
+        )
+        outside_us_hints = _outside_us_dimension_hints(question)
+        if _outside_us_phrase_present(question) and not outside_us_hints:
+            _ensure_transaction_step_for_filters(
+                query_plan,
+                filters={"_ambiguous_outside_us": True},
+                hops=int(payload.hops),
+                notes="Added to resolve ambiguous outside-US geography before running transaction evidence.",
+            )
+        elif _outside_us_phrase_present(question) and outside_us_hints:
+            _ensure_transaction_step_for_filters(
+                query_plan,
+                filters={"_outside_us_dimension_hint": True},
+                hops=int(payload.hops),
+                notes="Added to apply explicit outside-US geography dimension in transaction evidence.",
+            )
+        if _counterparty_country_nexus_question(question):
+            _ensure_transaction_step_for_filters(
+                query_plan,
+                filters={"_counterparty_country_nexus": True},
+                hops=int(payload.hops),
+                notes="Added to resolve subjectless counterparty-country nexus as transaction-backed counterparty evidence.",
+            )
+
+        tx_step = _query_plan_step_by_name(query_plan, "transaction_details") or {}
+        tx_endpoint = str(tx_step.get("endpoint") or "").strip()
+        tx_params_template_raw = tx_step.get("params")
+        tx_params_template = tx_params_template_raw if isinstance(tx_params_template_raw, dict) else {}
+        tx_mapping_info: dict[str, object] | None = None
+        normalized_tx_params_base: dict[str, object] = {}
+        applied_filters_for_clarification: dict[str, object] = {}
+        clarification: dict[str, object] | None = None
+        global_transaction_question = False
+        if tx_endpoint:
+            normalized_tx_params_base, tx_mapping_info = _normalize_transaction_filters_for_question(
+                connection=connection,
+                question=question,
+                base_params=tx_params_template,
+                filter_overrides=effective_filter_overrides,
+                capabilities=data_hub_capabilities,
+            )
+            applied_filters_for_clarification = (
+                tx_mapping_info.get("applied_filters")
+                if isinstance(tx_mapping_info, dict) and isinstance(tx_mapping_info.get("applied_filters"), dict)
+                else {}
+            )
+            clarification = (
+                None
+                if isinstance(effective_filter_overrides, dict) and effective_filter_overrides
+                else _outside_us_clarification(question, applied_filters_for_clarification)
+            )
+            global_transaction_question = (
+                clarification is None
+                and not _has_explicit_exposure_subject(question)
+                and _is_global_transaction_aggregate_question(question, tx_mapping_info)
+                and _capability_supports_global_transactions(data_hub_capabilities)
+            )
+            if tx_step:
+                plan_tx_params = dict(normalized_tx_params_base)
+                if global_transaction_question:
+                    plan_tx_params.pop("node_id", None)
+                    plan_tx_params["limit"] = 10000
+                    tx_step["endpoint"] = "/api/graph/exposure/transactions/global"
+                    tx_step["notes"] = "Run globally against cash facts for the interpreted transaction filters."
+                tx_step["params"] = _clean_query_plan_params(plan_tx_params)
+            if global_transaction_question:
+                _remove_query_plan_steps(query_plan, {"seed_search", "graph_expansion"})
 
         seed_step = _query_plan_step_by_name(query_plan, "seed_search") or {}
         seed_endpoint = str(seed_step.get("endpoint") or "/api/graph/exposure-seed-search")
@@ -8254,6 +8873,7 @@ def entity_search_exposure_question(
         seed_params = seed_params_raw if isinstance(seed_params_raw, dict) else {"q": question, "limit": int(payload.seed_limit)}
         if not str(seed_params.get("q") or "").strip():
             seed_params["q"] = question
+        seed_params["q"] = _exposure_seed_query_from_question(str(seed_params.get("q") or question))
         if int(seed_params.get("limit") or 0) < 1:
             seed_params["limit"] = int(payload.seed_limit)
 
@@ -8274,13 +8894,16 @@ def entity_search_exposure_question(
         )
 
         queried_data: list[dict[str, object]] = []
-        seed_payload = _proxy_data_hub_json(
-            connection,
-            seed_endpoint,
-            seed_params,
-        )
-        seed_rows_raw = seed_payload.get("results") if isinstance(seed_payload, dict) else []
-        seed_rows = seed_rows_raw if isinstance(seed_rows_raw, list) else []
+        seed_payload: dict[str, object] = {"results": [], "result_count": 0}
+        seed_rows: list[object] = []
+        if not global_transaction_question:
+            seed_payload = _proxy_data_hub_json(
+                connection,
+                seed_endpoint,
+                seed_params,
+            )
+            seed_rows_raw = seed_payload.get("results") if isinstance(seed_payload, dict) else []
+            seed_rows = seed_rows_raw if isinstance(seed_rows_raw, list) else []
         top_seeds: list[dict[str, object]] = []
         top_seed_count = max(1, min(int(intent_row.get("top_seed_count") or 3), 10))
         for row in seed_rows:
@@ -8290,35 +8913,37 @@ def entity_search_exposure_question(
                 break
         ordered_seeds = _ordered_seed_candidates(top_seeds)
         graph_seed_candidates = ordered_seeds
+        transaction_seed_node_types = _capability_seed_node_types(data_hub_capabilities)
         tx_seed_candidates = [
             row
             for row in ordered_seeds
-            if str(row.get("node_type") or "") in {"Customer", "Account", "CounterpartyAccount"}
+            if str(row.get("node_type") or "") in transaction_seed_node_types
         ] or ordered_seeds
 
-        queried_data.append(
-            {
-                "step": "seed_search",
-                "endpoint": seed_endpoint,
-                "params": seed_params,
-                "result_count": int(seed_payload.get("result_count") or len(seed_rows)),
-                "seed_candidates": [
-                    {
-                        "node_id": str(row.get("node_id") or ""),
-                        "node_type": str(row.get("node_type") or ""),
-                        "score": int(row.get("score") or 0),
-                    }
-                    for row in graph_seed_candidates[:10]
-                ],
-            }
-        )
+        if not global_transaction_question:
+            queried_data.append(
+                {
+                    "step": "seed_search",
+                    "endpoint": seed_endpoint,
+                    "params": seed_params,
+                    "result_count": int(seed_payload.get("result_count") or len(seed_rows)),
+                    "seed_candidates": [
+                        {
+                            "node_id": str(row.get("node_id") or ""),
+                            "node_type": str(row.get("node_type") or ""),
+                            "score": int(row.get("score") or 0),
+                        }
+                        for row in graph_seed_candidates[:10]
+                    ],
+                }
+            )
 
         evidence: list[dict[str, object]] = []
         aggregate_node_type_counts: dict[str, int] = {}
         aggregate_edge_type_counts: dict[str, int] = {}
         selected_graph_payload: dict[str, object] | None = None
         selected_graph_seed_node_id: str | None = None
-        for seed in graph_seed_candidates:
+        for seed in ([] if global_transaction_question else graph_seed_candidates):
             node_id = str(seed.get("node_id") or "").strip()
             if not node_id:
                 continue
@@ -8354,30 +8979,10 @@ def entity_search_exposure_question(
 
 
         transaction_evidence: list[dict[str, object]] = []
-        tx_step = _query_plan_step_by_name(query_plan, "transaction_details") or {}
-        tx_endpoint = str(tx_step.get("endpoint") or "").strip()
-        tx_params_template_raw = tx_step.get("params")
-        tx_params_template = tx_params_template_raw if isinstance(tx_params_template_raw, dict) else {}
-        tx_mapping_info: dict[str, object] | None = None
         interpreted_query: dict[str, object] | None = None
         transaction_linked_node_ids: set[str] = set()
+        transaction_graph_node_stats: dict[str, dict[str, object]] = {}
         if tx_endpoint:
-            normalized_tx_params_base, tx_mapping_info = _normalize_transaction_filters_for_question(
-                connection=connection,
-                question=question,
-                base_params=tx_params_template,
-                filter_overrides=effective_filter_overrides,
-            )
-            applied_filters_for_clarification = (
-                tx_mapping_info.get("applied_filters")
-                if isinstance(tx_mapping_info, dict) and isinstance(tx_mapping_info.get("applied_filters"), dict)
-                else {}
-            )
-            clarification = (
-                None
-                if isinstance(effective_filter_overrides, dict) and effective_filter_overrides
-                else _outside_us_clarification(question, applied_filters_for_clarification)
-            )
             interpreted_query = _build_interpreted_query(
                 question=question,
                 selected_intents=selected_intent_rows,
@@ -8446,7 +9051,7 @@ def entity_search_exposure_question(
                 )
                 db.commit()
                 return response_data
-            if _is_global_transaction_aggregate_question(question, tx_mapping_info):
+            if global_transaction_question:
                 global_params = dict(normalized_tx_params_base)
                 global_params.pop("node_id", None)
                 global_params["limit"] = 10000
@@ -8491,6 +9096,10 @@ def entity_search_exposure_question(
                 transaction_linked_node_ids.update(
                     _transaction_node_ids_from_rows([r for r in tx_rows if isinstance(r, dict)])
                 )
+                _update_transaction_graph_node_stats(
+                    transaction_graph_node_stats,
+                    [r for r in tx_rows if isinstance(r, dict)],
+                )
             for seed in tx_seed_candidates[:4]:
                 if transaction_evidence and transaction_evidence[0].get("scope") == "global":
                     break
@@ -8511,6 +9120,10 @@ def entity_search_exposure_question(
                 tx_rows = tx_payload.get("rows") if isinstance(tx_payload.get("rows"), list) else []
                 transaction_linked_node_ids.update(
                     _transaction_node_ids_from_rows([r for r in tx_rows if isinstance(r, dict)])
+                )
+                _update_transaction_graph_node_stats(
+                    transaction_graph_node_stats,
+                    [r for r in tx_rows if isinstance(r, dict)],
                 )
                 queried_data.append(
                     {
@@ -8539,21 +9152,54 @@ def entity_search_exposure_question(
             )
 
         enriched_transaction_nodes: list[str] = []
-        if bool(payload.include_graph) and selected_graph_payload and transaction_linked_node_ids:
-            selected_elements = (
-                selected_graph_payload.get("elements")
-                if isinstance(selected_graph_payload.get("elements"), dict)
-                else {}
+        transaction_graph_enrichment: dict[str, object] = {
+            "candidate_count": 0,
+            "selected_count": 0,
+            "deferred_count": 0,
+            "selection_limit": 4,
+            "ranking_basis": "absolute transaction amount",
+            "ranked_nodes": [],
+            "selected_nodes": [],
+            "deferred_nodes": [],
+        }
+        if bool(payload.include_graph) and transaction_linked_node_ids:
+            existing_node_ids: set[str] = set()
+            if selected_graph_payload:
+                selected_elements = (
+                    selected_graph_payload.get("elements")
+                    if isinstance(selected_graph_payload.get("elements"), dict)
+                    else {}
+                )
+                selected_nodes = selected_elements.get("nodes") if isinstance(selected_elements.get("nodes"), list) else []
+                existing_node_ids = {
+                    str((n.get("data", {}) or {}).get("id") or "")
+                    for n in selected_nodes
+                    if isinstance(n, dict)
+                }
+            transaction_graph_enrichment = _transaction_graph_enrichment_plan(
+                transaction_graph_node_stats,
+                existing_node_ids,
+                limit=4,
             )
-            selected_nodes = selected_elements.get("nodes") if isinstance(selected_elements.get("nodes"), list) else []
-            existing_node_ids = {
-                str((n.get("data", {}) or {}).get("id") or "")
-                for n in selected_nodes
-                if isinstance(n, dict)
+            deferred_node_ids = {
+                str(row.get("node_id") or "")
+                for row in transaction_graph_enrichment.get("deferred_nodes", [])
+                if isinstance(row, dict) and str(row.get("node_id") or "").strip()
             }
-            candidate_node_ids = sorted(
-                [nid for nid in transaction_linked_node_ids if nid and nid not in existing_node_ids]
-            )[:8]
+            selected_node_ids = {
+                str(row.get("node_id") or "")
+                for row in transaction_graph_enrichment.get("selected_nodes", [])
+                if isinstance(row, dict) and str(row.get("node_id") or "").strip()
+            }
+            candidate_node_ids = [
+                str(row.get("node_id") or "")
+                for row in transaction_graph_enrichment.get("selected_nodes", [])
+                if (
+                    isinstance(row, dict)
+                    and str(row.get("node_id") or "").strip()
+                    and str(row.get("node_id") or "").strip() not in existing_node_ids
+                )
+            ]
             for tx_node_id in candidate_node_ids:
                 enrich_params = dict(graph_params_template)
                 enrich_params["node_id"] = tx_node_id
@@ -8565,7 +9211,11 @@ def entity_search_exposure_question(
                     graph_endpoint,
                     enrich_params,
                 )
-                selected_graph_payload = _merge_graph_payloads(selected_graph_payload, enrich_payload)
+                if selected_graph_payload is None:
+                    selected_graph_payload = enrich_payload
+                    selected_graph_seed_node_id = tx_node_id
+                else:
+                    selected_graph_payload = _merge_graph_payloads(selected_graph_payload, enrich_payload)
                 enriched_transaction_nodes.append(tx_node_id)
 
                 node_type, business_key = _parse_node_id(tx_node_id)
@@ -8591,7 +9241,14 @@ def entity_search_exposure_question(
                         "params": enrich_params,
                         "result_node_count": int(enrich_payload.get("node_count") or 0),
                         "result_edge_count": int(enrich_payload.get("edge_count") or 0),
+                        "selection_basis": "top transaction-linked counterparty by absolute amount",
                     }
+                )
+            if selected_graph_payload is not None:
+                selected_graph_payload = _prune_transaction_counterparties_from_graph(
+                    selected_graph_payload,
+                    selected_node_ids,
+                    deferred_node_ids.difference(selected_node_ids),
                 )
 
         deterministic_summary, deterministic_findings = _deterministic_exposure_summary(question, intent, evidence)
@@ -8697,6 +9354,7 @@ def entity_search_exposure_question(
             "interpreted_query": interpreted_query,
             "followup_resolution": followup_resolution,
             "enriched_transaction_nodes": enriched_transaction_nodes,
+            "transaction_graph_enrichment": transaction_graph_enrichment,
             "seed_selection": {
                 "graph_seed_candidates": [str(row.get("node_id") or "") for row in graph_seed_candidates[:10]],
                 "transaction_seed_candidates": [str(row.get("node_id") or "") for row in tx_seed_candidates[:10]],
@@ -8740,6 +9398,7 @@ def entity_search_exposure_question(
             "transaction_filter_mapping": tx_mapping_info,
             "interpreted_query": interpreted_query,
             "enriched_transaction_nodes": enriched_transaction_nodes,
+            "transaction_graph_enrichment": transaction_graph_enrichment,
             "seed_selection": {
                 "graph_seed_candidates": [str(row.get("node_id") or "") for row in graph_seed_candidates[:10]],
                 "transaction_seed_candidates": [str(row.get("node_id") or "") for row in tx_seed_candidates[:10]],

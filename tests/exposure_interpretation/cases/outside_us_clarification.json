@@ -1,0 +1,59 @@
+{
+  "schema_version": "2026-04-28.v1",
+  "description": "Outside-US ambiguity and structured clarification behavior.",
+  "cases": [
+    {
+      "name": "arigato_outside_us_requires_clarification",
+      "description": "Ambiguous outside-US wording should ask which geography dimension to use.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "Show exposure for ARIGATO LIMITED outside the US",
+          "expect": {
+            "scope": "clarification",
+            "mode": "needs_clarification",
+            "status": "needs_clarification",
+            "queried_steps": ["seed_search", "graph_expansion", "transaction_filter_mapping"],
+            "clarification_required": true,
+            "clarification_labels": [
+              "Counterparty jurisdiction",
+              "Transaction country",
+              "Customer country",
+              "Branch country"
+            ],
+            "filters": {
+              "outside_country_code_2": null,
+              "outside_counterparty_jurisdiction": null,
+              "outside_customer_country_code": null,
+              "outside_branch_country_code": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "arigato_outside_us_counterparty_clarification",
+      "description": "Counterparty-jurisdiction clarification should apply outside_counterparty_jurisdiction and return seeded transaction evidence.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "Show exposure for ARIGATO LIMITED outside the US",
+          "filter_overrides": {
+            "outside_counterparty_jurisdiction": "US"
+          },
+          "expect": {
+            "scope": "seeded",
+            "queried_steps": ["seed_search", "graph_expansion", "transaction_filter_mapping", "transaction_details"],
+            "filters": {
+              "outside_counterparty_jurisdiction": "US",
+              "outside_country_code_2": null
+            },
+            "min_tx_rows": 1
+          }
+        }
+      ]
+    }
+  ]
+}

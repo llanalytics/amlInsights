@@ -1,0 +1,58 @@
+{
+  "schema_version": "2026-04-28.v1",
+  "description": "Global transaction interpretation for France counterparty questions.",
+  "cases": [
+    {
+      "name": "find_wires_to_france_global",
+      "description": "Subjectless wire-to-France question should use global transaction search and counterparty jurisdiction.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "find wires to france",
+          "expect": {
+            "scope": "global",
+            "queried_steps": ["transaction_filter_mapping", "global_transaction_details"],
+            "must_not_query_steps": ["seed_search", "graph_expansion", "transaction_details"],
+            "plan_endpoints": ["/api/graph/exposure/transactions/global"],
+            "filters": {
+              "direction": "Outbound",
+              "mechanism_contains": "Wire",
+              "counterparty_jurisdiction": "FR",
+              "outside_country_code_2": null,
+              "outside_counterparty_jurisdiction": null
+            },
+            "min_tx_rows": 1,
+            "sample_transaction_keys": ["TXN-EXT-900003730"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "all_transactions_sent_to_counterparties_in_france",
+      "description": "All transactions sent to counterparties in France should not inherit outside-country or wire filters.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "I was looking for all transactions sent to counterparties in France",
+          "expect": {
+            "scope": "global",
+            "queried_steps": ["transaction_filter_mapping", "global_transaction_details"],
+            "must_not_query_steps": ["seed_search", "graph_expansion", "transaction_details"],
+            "plan_endpoints": ["/api/graph/exposure/transactions/global"],
+            "filters": {
+              "direction": "Outbound",
+              "mechanism_contains": null,
+              "counterparty_jurisdiction": "FR",
+              "outside_country_code_2": null,
+              "outside_counterparty_jurisdiction": null
+            },
+            "min_tx_rows": 1,
+            "sample_transaction_keys": ["TXN-EXT-900003730"]
+          }
+        }
+      ]
+    }
+  ]
+}

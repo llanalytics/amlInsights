@@ -1,0 +1,94 @@
+{
+  "schema_version": "2026-04-28.v1",
+  "description": "Explicit outside-US dimension hints should avoid clarification and map to the requested geography dimension.",
+  "cases": [
+    {
+      "name": "arigato_transaction_country_outside_us_hint",
+      "description": "Transaction-country wording should map outside US to cash fact country_code_2.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "Show exposure for ARIGATO LIMITED with transaction country outside the US",
+          "expect": {
+            "scope": "seeded",
+            "queried_steps": ["seed_search", "graph_expansion", "transaction_filter_mapping", "transaction_details"],
+            "clarification_required": false,
+            "filters": {
+              "outside_country_code_2": "US",
+              "outside_counterparty_jurisdiction": null,
+              "outside_customer_country_code": null,
+              "outside_branch_country_code": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "arigato_counterparty_outside_us_hint",
+      "description": "Counterparty wording should map outside US to counterparty jurisdiction.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "Show exposure for ARIGATO LIMITED with counterparties outside the US",
+          "expect": {
+            "scope": "seeded",
+            "queried_steps": ["seed_search", "graph_expansion", "transaction_filter_mapping", "transaction_details"],
+            "clarification_required": false,
+            "filters": {
+              "outside_counterparty_jurisdiction": "US",
+              "outside_country_code_2": null,
+              "outside_customer_country_code": null,
+              "outside_branch_country_code": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "arigato_customer_country_outside_us_hint",
+      "description": "Customer-country wording should map outside US to customer country.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "Show exposure for ARIGATO LIMITED with customer country outside the US",
+          "expect": {
+            "scope": "seeded",
+            "queried_steps": ["seed_search", "graph_expansion", "transaction_filter_mapping", "transaction_details"],
+            "clarification_required": false,
+            "filters": {
+              "outside_customer_country_code": "US",
+              "outside_country_code_2": null,
+              "outside_counterparty_jurisdiction": null,
+              "outside_branch_country_code": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "arigato_branch_country_outside_us_hint",
+      "description": "Branch-country wording should map outside US to branch country.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "Show exposure for ARIGATO LIMITED with branch country outside the US",
+          "expect": {
+            "scope": "seeded",
+            "queried_steps": ["seed_search", "graph_expansion", "transaction_filter_mapping", "transaction_details"],
+            "clarification_required": false,
+            "filters": {
+              "outside_branch_country_code": "US",
+              "outside_country_code_2": null,
+              "outside_counterparty_jurisdiction": null,
+              "outside_customer_country_code": null
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

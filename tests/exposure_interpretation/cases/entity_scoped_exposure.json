@@ -1,0 +1,42 @@
+{
+  "schema_version": "2026-04-28.v1",
+  "description": "Entity-scoped exposure questions should retain graph-backed seed behavior.",
+  "cases": [
+    {
+      "name": "arigato_entity_exposure_uses_seed_search",
+      "description": "Entity-scoped exposure question should run seed search and graph expansion instead of global transaction search.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "Show exposure for ARIGATO LIMITED",
+          "expect": {
+            "scope": "seeded",
+            "queried_steps": ["seed_search", "graph_expansion"],
+            "must_not_query_steps": ["global_transaction_details"],
+            "min_evidence_count": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "arigato_negative_news_associated_with_extracts_entity",
+      "description": "Associated-with phrasing should seed search on the entity name instead of the full analyst sentence.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "search for negative news associated with ARIGATO LIMITED",
+          "include_graph": true,
+          "expect": {
+            "scope": "seeded",
+            "queried_steps": ["seed_search", "graph_expansion"],
+            "must_not_query_steps": ["global_transaction_details"],
+            "min_evidence_count": 1,
+            "min_graph_nodes": 1
+          }
+        }
+      ]
+    }
+  ]
+}

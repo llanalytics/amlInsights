@@ -1,0 +1,82 @@
+{
+  "schema_version": "2026-04-28.v1",
+  "description": "Session follow-up behavior that broadens or switches transaction filters.",
+  "cases": [
+    {
+      "name": "expand_france_wire_to_any_counterparty_transaction",
+      "description": "A follow-up expansion from wires to any transaction should clear mechanism and direction while preserving France counterparty jurisdiction.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "find wires to france",
+          "expect": {
+            "scope": "global",
+            "queried_steps": ["transaction_filter_mapping", "global_transaction_details"],
+            "must_not_query_steps": ["seed_search", "graph_expansion", "transaction_details"],
+            "plan_endpoints": ["/api/graph/exposure/transactions/global"],
+            "filters": {
+              "direction": "Outbound",
+              "mechanism_contains": "Wire",
+              "counterparty_jurisdiction": "FR",
+              "outside_country_code_2": null
+            },
+            "min_tx_rows": 1,
+            "sample_transaction_keys": ["TXN-EXT-900003730"]
+          }
+        },
+        {
+          "question": "lets expand this search to any transaction with a counterparty in France",
+          "expect": {
+            "scope": "global",
+            "queried_steps": ["transaction_filter_mapping", "global_transaction_details"],
+            "must_not_query_steps": ["seed_search", "graph_expansion", "transaction_details"],
+            "plan_endpoints": ["/api/graph/exposure/transactions/global"],
+            "filters": {
+              "direction": null,
+              "mechanism_contains": null,
+              "counterparty_jurisdiction": "FR",
+              "outside_country_code_2": null
+            },
+            "min_tx_rows": 4,
+            "sample_transaction_keys": ["TXN-EXT-900005971", "TXN-EXT-900003730"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "switch_outside_us_counterparty_to_transaction_country",
+      "description": "A follow-up switch should replace counterparty outside-US geography with transaction-country outside-US geography.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "Show exposure for ARIGATO LIMITED outside the US",
+          "filter_overrides": {
+            "outside_counterparty_jurisdiction": "US"
+          },
+          "expect": {
+            "scope": "seeded",
+            "queried_steps": ["seed_search", "graph_expansion", "transaction_filter_mapping", "transaction_details"],
+            "filters": {
+              "outside_counterparty_jurisdiction": "US",
+              "outside_country_code_2": null
+            },
+            "min_tx_rows": 1
+          }
+        },
+        {
+          "question": "Switch outside US to transaction country instead",
+          "expect": {
+            "scope": "seeded",
+            "filters": {
+              "outside_counterparty_jurisdiction": null,
+              "outside_country_code_2": "US"
+            },
+            "min_tx_rows": 1
+          }
+        }
+      ]
+    }
+  ]
+}

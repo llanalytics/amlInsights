@@ -15,6 +15,12 @@
       details.panel:not([open]) .accordion-title { border-bottom: none; }
       details.panel:not([open]) .accordion-title::after { content: "▸"; }
       .accordion-body { padding: 1rem; }
+      .json-accordion { border:1px solid #d8e1e9; border-radius:8px; margin-top:0.5rem; background:#fbfdff; overflow:hidden; }
+      .json-accordion summary { cursor:pointer; padding:0.55rem 0.65rem; font-weight:700; color:#1f2933; user-select:none; }
+      .json-accordion summary::after { content:"▸"; float:right; color:#4d6478; }
+      .json-accordion[open] summary { border-bottom:1px solid #d8e1e9; }
+      .json-accordion[open] summary::after { content:"▾"; }
+      .json-accordion pre { margin:0; border:none; border-radius:0; }
       .grid { display:grid; grid-template-columns: repeat(4,minmax(160px,1fr)); gap:0.6rem; }
       label { font-size:0.9rem; display:block; }
       input, select, button { width:100%; box-sizing:border-box; margin-top:0.2rem; padding:0.55rem; border-radius:8px; border:1px solid #b7c7d6; font-family: inherit; }
@@ -32,7 +38,7 @@
       .session-actions { display:flex; gap:0.35rem; flex-wrap:wrap; margin-top:0.35rem; }
       .compact-btn { width:auto; padding:0.35rem 0.55rem; border-radius:6px; font-size:0.84rem; }
       .txn-table-wrap { overflow:auto; max-height:520px; border:1px solid #d8e1e9; border-radius:8px; }
-      .txn-table-wrap table { min-width:1180px; }
+      .txn-table-wrap table { min-width:1280px; }
       table { width:100%; border-collapse: collapse; }
       th, td { text-align:left; padding:0.45rem; border-bottom:1px solid #d8e1e9; vertical-align: top; font-size:0.93rem; }
       pre { background:#f4f8fc; border:1px solid #d8e1e9; border-radius:8px; padding:0.6rem; overflow:auto; font-size:0.82rem; }
@@ -40,11 +46,16 @@
       .graph-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 0.8rem; align-items: start; }
       .graph-main { min-width: 0; }
       .graph-side { min-width: 0; border: 1px solid #d8e1e9; border-radius: 10px; padding: 0.7rem; background: #fbfdff; height: calc(74vh + 46px); min-height: 666px; overflow: auto; }
+      .graph-enrichment { display:none; border:1px solid #d8e1e9; border-radius:8px; background:#fbfdff; padding:0.55rem; margin-bottom:0.6rem; }
+      .graph-enrichment.active { display:grid; grid-template-columns: 1fr auto; gap:0.6rem; align-items:center; }
+      .graph-enrichment button { width:auto; min-width:180px; }
       @media (max-width: 900px) {
         .grid { grid-template-columns: 1fr; }
         .session-tools { grid-template-columns: 1fr; }
         .graph-layout { grid-template-columns: 1fr; }
         .graph-side { height: auto; min-height: 280px; }
+        .graph-enrichment.active { grid-template-columns: 1fr; }
+        .graph-enrichment button { width:100%; }
         #graph { height: 520px; min-height: 520px; }
       }
     </style>
@@ -109,17 +120,26 @@
             <div style="margin-top:0.5rem;"><strong>Interpreted Query</strong></div>
             <div id="qaInterpretation" class="subtle">-</div>
             <div id="qaClarification" style="margin-top:0.5rem;"></div>
-            <pre id="qaInterpretedQuery">-</pre>
+            <details class="json-accordion">
+              <summary>Interpreted Query JSON</summary>
+              <pre id="qaInterpretedQuery">-</pre>
+            </details>
             <div style="margin-top:0.5rem;"><strong>Grounded Summary</strong></div>
             <div id="qaSummary" class="subtle">Run analysis to generate a grounded summary.</div>
             <div style="margin-top:0.5rem;"><strong>Why Relevant</strong></div>
             <ul id="qaRelevance" class="subtle"></ul>
-            <div style="margin-top:0.5rem;"><strong>What Data Was Queried</strong></div>
-            <pre id="qaQueriedData">-</pre>
-            <div style="margin-top:0.5rem;"><strong>Structured Query Plan</strong></div>
-            <pre id="qaPlan">-</pre>
-            <div style="margin-top:0.5rem;"><strong>Relationship Findings</strong></div>
-            <pre id="qaFindings">-</pre>
+            <details class="json-accordion">
+              <summary>What Data Was Queried</summary>
+              <pre id="qaQueriedData">-</pre>
+            </details>
+            <details class="json-accordion">
+              <summary>Structured Query Plan</summary>
+              <pre id="qaPlan">-</pre>
+            </details>
+            <details class="json-accordion">
+              <summary>Relationship Findings</summary>
+              <pre id="qaFindings">-</pre>
+            </details>
             <div style="margin-top:0.5rem;"><strong>Transaction Detail Evidence</strong></div>
             <table>
               <thead>
@@ -148,8 +168,10 @@
             <ul id="qaAssumptions" class="subtle"></ul>
             <div style="margin-top:0.5rem;"><strong>Limitations</strong></div>
             <ul id="qaLimitations" class="subtle"></ul>
-            <div style="margin-top:0.5rem;"><strong>Audit</strong></div>
-            <pre id="qaAudit">-</pre>
+            <details class="json-accordion">
+              <summary>Audit</summary>
+              <pre id="qaAudit">-</pre>
+            </details>
           </div>
         </div>
       </details>
@@ -171,6 +193,7 @@
                   <th>account_key</th>
                   <th>aml_classification</th>
                   <th>direction</th>
+                  <th>mechanism</th>
                   <th>amount</th>
                   <th>country_code_2</th>
                   <th>currency_code</th>
@@ -195,6 +218,10 @@
                   <th>
                     <input id="txnFilterDirection" placeholder="text">
                     <select id="txnSelectDirection" multiple size="3"></select>
+                  </th>
+                  <th>
+                    <input id="txnFilterMechanism" placeholder="text">
+                    <select id="txnSelectMechanism" multiple size="3"></select>
                   </th>
                   <th>
                     <input id="txnFilterAmount" placeholder="min or min-max">
@@ -236,6 +263,10 @@
                 <button class="secondary" onclick="zoomGraphOut()">Zoom Out</button>
                 <button class="secondary" onclick="resetGraphView()">Reset View</button>
               </div>
+              <div id="graphEnrichmentNotice" class="graph-enrichment">
+                <div class="subtle" id="graphEnrichmentText"></div>
+                <button class="secondary" id="expandTxnCounterpartiesBtn" type="button" onclick="expandDeferredTransactionCounterparties()">Expand Counterparties</button>
+              </div>
               <div id="graph"></div>
             </div>
             <div class="graph-side">
@@ -261,6 +292,9 @@
       const nodeOwners = new Map();
       const edgeOwners = new Map();
       const expandedByNode = new Map();
+      let latestTransactionGraphEnrichment = null;
+      let latestGraphCounterpartyPruning = null;
+      const AGGREGATE_COUNTERPARTY_NODE_TYPE = "CounterpartyRemainder";
       let lastFocusedElementSig = "";
       let lastFocusedAtMs = 0;
       let lastQuestionPayload = null;
@@ -438,6 +472,14 @@
         const question = String(response.original_question || interpretation.question || response.question || "");
         if (question) el("questionInput").value = question;
         renderQuestionAnalysis(response);
+        renderTransactionGraphEnrichment(response);
+        if (response && response.graph_payload && response.graph_payload.elements) {
+          renderGraph(response.graph_payload, { collapse: false });
+          clearDetails();
+        } else {
+          clearGraph({ silent: true });
+          clearDetails("No graph was saved for this interpretation.");
+        }
         msg("Restored saved interpretation snapshot.");
       }
       async function rerunInterpretation(interpretation) {
@@ -459,6 +501,9 @@
           currentExposureSessionDetail = { ...currentExposureSession, messages: [], interpretations: [] };
           renderExposureSessionStatus();
           renderExposureTranscript();
+          clearQuestionAnalysis();
+          clearGraph({ silent: true });
+          clearDetails();
           await loadExposureSessions();
           msg("Started investigation session.");
           return currentExposureSession;
@@ -497,6 +542,7 @@
           Customer: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='20' r='11' fill='#ffffff'/><path d='M12 54c0-10 8-17 20-17s20 7 20 17' fill='#ffffff'/></svg>`,
           Account: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='14' width='48' height='36' rx='4' fill='#ffffff'/><rect x='12' y='22' width='40' height='4' fill='#1f5f8b'/><rect x='12' y='32' width='22' height='4' fill='#1f5f8b'/></svg>`,
           CounterpartyAccount: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='12' width='48' height='40' rx='4' fill='#ffffff'/><path d='M10 30h44' stroke='#8b5f1f' stroke-width='4'/><circle cx='45' cy='42' r='4' fill='#8b5f1f'/></svg>`,
+          CounterpartyRemainder: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='7' y='11' width='50' height='42' rx='5' fill='#ffffff'/><path d='M10 29h44' stroke='#8b5f1f' stroke-width='4'/><circle cx='22' cy='42' r='3.6' fill='#8b5f1f'/><circle cx='32' cy='42' r='3.6' fill='#8b5f1f'/><circle cx='42' cy='42' r='3.6' fill='#8b5f1f'/></svg>`,
           OfacSdn: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='26' fill='#ffffff'/><path d='M20 20l24 24M44 20L20 44' stroke='#9b1c1c' stroke-width='6' stroke-linecap='round'/></svg>`,
           PanamaNode: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><polygon points='32,8 56,24 56,40 32,56 8,40 8,24' fill='#ffffff'/></svg>`,
           SurrogateName: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='8' y='8' width='48' height='48' rx='6' fill='#ffffff'/><text x='32' y='40' text-anchor='middle' font-size='28' font-family='Arial' fill='#6b7280'>N</text></svg>`,
@@ -658,6 +704,408 @@
         owners.delete(o);
         if (!owners.size) mapObj.delete(k);
       }
+      function renderTransactionGraphEnrichment(data) {
+        const box = el("graphEnrichmentNotice");
+        const text = el("graphEnrichmentText");
+        const btn = el("expandTxnCounterpartiesBtn");
+        latestTransactionGraphEnrichment = (data && data.transaction_graph_enrichment && typeof data.transaction_graph_enrichment === "object")
+          ? data.transaction_graph_enrichment
+          : null;
+        if (!box || !text || !btn) return;
+        const selected = Number(latestTransactionGraphEnrichment?.selected_count || 0);
+        const deferred = Number(latestTransactionGraphEnrichment?.deferred_count || 0);
+        const graphHidden = Number(latestGraphCounterpartyPruning?.hidden_count || 0);
+        const basis = String(latestTransactionGraphEnrichment?.ranking_basis || "transaction amount");
+        if (!selected && !deferred && !graphHidden) {
+          box.classList.remove("active");
+          text.textContent = "";
+          btn.disabled = true;
+          return;
+        }
+        box.classList.add("active");
+        if (graphHidden > 0) {
+          const visible = Number(latestGraphCounterpartyPruning?.visible_count || selected || 0);
+          text.textContent = `Graph starts with the top ${visible} counterparties by transaction-flow amount; ${graphHidden} more counterparty node(s) are hidden from the initial view.`;
+        } else {
+          text.textContent = deferred > 0
+            ? `Graph starts with the top ${selected} transaction counterparties by ${basis}; ${deferred} more counterparty node(s) are available.`
+            : `Graph includes the available transaction counterparties ranked by ${basis}.`;
+        }
+        btn.disabled = deferred <= 0 && graphHidden <= 0;
+        btn.textContent = graphHidden > 0 ? `Expand ${graphHidden} More` : (deferred > 0 ? `Expand ${deferred} More` : "No More Counterparties");
+      }
+      function transactionFlowAmountForCounterparty(counterpartyId, edges) {
+        let amount = 0;
+        for (const edge of edges || []) {
+          const d = edge.data || {};
+          const edgeType = String(d.edge_type || "");
+          if (!edgeType.startsWith("TXN_FLOW")) continue;
+          const source = String(d.source || "");
+          const target = String(d.target || "");
+          if (source !== counterpartyId && target !== counterpartyId) continue;
+          amount += Math.abs(Number(d.total_amount || d.amount || 0));
+        }
+        return amount;
+      }
+      function edgeIdForAggregate(anchorId, aggregateId) {
+        return `${anchorId}|COUNTERPARTY_REMAINDER|${aggregateId}`;
+      }
+      function graphNodeType(node) {
+        const data = node && node.data ? node.data : {};
+        return String(data.node_type || "");
+      }
+      function graphNodeId(node) {
+        const data = node && node.data ? node.data : {};
+        return String(data.id || "");
+      }
+      function buildCounterpartyExpansionPayload(hiddenNodes, hiddenEdges, allNodeById, visibleNodeIds) {
+        const visibleIds = new Set(Array.from(visibleNodeIds || []).map((v) => String(v || "")).filter(Boolean));
+        const hiddenIds = new Set((hiddenNodes || []).map((node) => graphNodeId(node)).filter(Boolean));
+        const hiddenNodeData = (hiddenNodes || []).map((node) => {
+          const data = node && node.data ? node.data : {};
+          const id = String(data.id || "");
+          const neighborIds = new Set();
+          for (const edge of hiddenEdges || []) {
+            const d = edge && edge.data ? edge.data : {};
+            const source = String(d.source || "");
+            const target = String(d.target || "");
+            if (source === id && target) neighborIds.add(target);
+            if (target === id && source) neighborIds.add(source);
+          }
+          return { data: { ...data, degree_total: Math.max(Number(data.degree_total || 0), neighborIds.size) } };
+        });
+        const expansionNodes = new Map(hiddenNodeData.map((node) => [String(node.data.id || ""), node]));
+        const expansionEdges = new Map();
+        for (const hiddenId of hiddenIds) {
+          const touching = (hiddenEdges || []).filter((edge) => {
+            const d = edge && edge.data ? edge.data : {};
+            return String(d.source || "") === hiddenId || String(d.target || "") === hiddenId;
+          });
+          const anchorEdges = touching.filter((edge) => {
+            const d = edge && edge.data ? edge.data : {};
+            const source = String(d.source || "");
+            const target = String(d.target || "");
+            const other = source === hiddenId ? target : source;
+            return visibleIds.has(other);
+          });
+          for (const edge of anchorEdges) {
+            const d = edge && edge.data ? edge.data : {};
+            const edgeId = String(d.id || `${d.source}|${d.edge_type || "EDGE"}|${d.target}`);
+            expansionEdges.set(edgeId, { data: d });
+          }
+        }
+        return {
+          elements: {
+            nodes: Array.from(expansionNodes.values()),
+            edges: Array.from(expansionEdges.values()),
+          }
+        };
+      }
+      function compactCounterpartyExpansionPayload(payload, focusNodeId) {
+        const elements = (payload && payload.elements) ? payload.elements : { nodes: [], edges: [] };
+        const nodes = Array.isArray(elements.nodes) ? elements.nodes : [];
+        const edges = Array.isArray(elements.edges) ? elements.edges : [];
+        const nodeById = new Map();
+        for (const node of nodes) {
+          const id = graphNodeId(node);
+          if (id) nodeById.set(id, node);
+        }
+        const focusId = String(focusNodeId || "");
+        if (!focusId || !nodeById.has(focusId)) return payload;
+        const visibleNodeIds = new Set([focusId]);
+        const visibleEdges = new Map();
+        const neighborIds = new Set();
+        const includeNodeTypes = new Set(["Account", "Customer", "OfacSdn", "PanamaNode"]);
+        for (const edge of edges) {
+          const d = edge && edge.data ? edge.data : {};
+          const source = String(d.source || "");
+          const target = String(d.target || "");
+          if (source !== focusId && target !== focusId) continue;
+          const other = source === focusId ? target : source;
+          const otherNode = nodeById.get(other);
+          const otherType = graphNodeType(otherNode);
+          neighborIds.add(other);
+          if (SURROGATE_TYPES.has(otherType)) continue;
+          if (otherType === "CounterpartyAccount") continue;
+          if (!includeNodeTypes.has(otherType)) continue;
+          const edgeId = String(d.id || `${source}|${d.edge_type || "EDGE"}|${target}`);
+          visibleNodeIds.add(other);
+          visibleEdges.set(edgeId, { data: d });
+        }
+        for (const edge of edges) {
+          const d = edge && edge.data ? edge.data : {};
+          const source = String(d.source || "");
+          const target = String(d.target || "");
+          if (!visibleNodeIds.has(source) || !visibleNodeIds.has(target)) continue;
+          const sourceType = graphNodeType(nodeById.get(source));
+          const targetType = graphNodeType(nodeById.get(target));
+          if (SURROGATE_TYPES.has(sourceType) || SURROGATE_TYPES.has(targetType)) continue;
+          const edgeId = String(d.id || `${source}|${d.edge_type || "EDGE"}|${target}`);
+          visibleEdges.set(edgeId, { data: d });
+        }
+        const compactNodes = [];
+        for (const id of visibleNodeIds) {
+          const node = nodeById.get(id);
+          if (!node || !node.data) continue;
+          const data = node.data || {};
+          compactNodes.push({
+            data: {
+              ...data,
+              degree_total: id === focusId ? Math.max(Number(data.degree_total || 0), neighborIds.size) : Number(data.degree_total || 0),
+            }
+          });
+        }
+        return {
+          ...payload,
+          elements: {
+            nodes: compactNodes,
+            edges: Array.from(visibleEdges.values()),
+          },
+          node_count: compactNodes.length,
+          edge_count: visibleEdges.size,
+        };
+      }
+      function limitInitialCounterpartyGraph(payload, limit=4) {
+        latestGraphCounterpartyPruning = null;
+        const elements = (payload && payload.elements) ? payload.elements : { nodes: [], edges: [] };
+        const nodes = Array.isArray(elements.nodes) ? elements.nodes : [];
+        const edges = Array.isArray(elements.edges) ? elements.edges : [];
+        const allNodeById = new Map();
+        for (const node of nodes) {
+          const id = graphNodeId(node);
+          if (id) allNodeById.set(id, node);
+        }
+        const counterpartyNodes = nodes
+          .map((node) => node && node.data ? node.data : {})
+          .filter((data) => String(data.node_type || "") === "CounterpartyAccount" && String(data.id || ""));
+        if (counterpartyNodes.length <= limit) return payload;
+        const selectedFromBackend = new Set(
+          Array.isArray(latestTransactionGraphEnrichment?.selected_node_ids)
+            ? latestTransactionGraphEnrichment.selected_node_ids.map((v) => String(v || "")).filter(Boolean)
+            : []
+        );
+        const ranked = counterpartyNodes
+          .map((data) => ({
+            id: String(data.id || ""),
+            amount: transactionFlowAmountForCounterparty(String(data.id || ""), edges),
+            label: String(data.label || data.id || "")
+          }))
+          .sort((a, b) => (b.amount - a.amount) || a.label.localeCompare(b.label));
+        const counterpartyIds = new Set(counterpartyNodes.map((data) => String(data.id || "")).filter(Boolean));
+        const selectedInGraph = new Set(Array.from(selectedFromBackend).filter((id) => counterpartyIds.has(id)));
+        const keepIds = selectedInGraph.size
+          ? selectedInGraph
+          : new Set(ranked.slice(0, limit).map((row) => row.id));
+        const hiddenIds = new Set(ranked.map((row) => row.id).filter((id) => !keepIds.has(id)));
+        if (!hiddenIds.size) return payload;
+        const keptNodes = [];
+        const keptNodeIds = new Set();
+        const hiddenNodes = [];
+        for (const node of nodes) {
+          const data = node && node.data ? node.data : {};
+          const id = String(data.id || "");
+          if (String(data.node_type || "") === "CounterpartyAccount" && hiddenIds.has(id)) {
+            hiddenNodes.push(node);
+            continue;
+          }
+          keptNodes.push(node);
+          if (id) keptNodeIds.add(id);
+        }
+        const keptEdges = [];
+        const hiddenEdges = [];
+        for (const edge of edges) {
+          const d = edge && edge.data ? edge.data : {};
+          const source = String(d.source || "");
+          const target = String(d.target || "");
+          if (hiddenIds.has(source) || hiddenIds.has(target)) {
+            hiddenEdges.push(edge);
+            continue;
+          }
+          if (keptNodeIds.has(source) && keptNodeIds.has(target)) keptEdges.push(edge);
+        }
+        const aggregateId = "__counterparty_remainder__";
+        const anchorIds = new Set();
+        let aggregateAmount = 0;
+        for (const row of ranked) {
+          if (hiddenIds.has(row.id)) aggregateAmount += Number(row.amount || 0);
+        }
+        for (const edge of hiddenEdges) {
+          const d = edge && edge.data ? edge.data : {};
+          const source = String(d.source || "");
+          const target = String(d.target || "");
+          const sourceHidden = hiddenIds.has(source);
+          const targetHidden = hiddenIds.has(target);
+          const other = sourceHidden ? target : (targetHidden ? source : "");
+          if (!other || !keptNodeIds.has(other)) continue;
+          const otherNode = allNodeById.get(other);
+          const otherType = graphNodeType(otherNode);
+          if (otherType === "Account" || otherType === "Customer") anchorIds.add(other);
+        }
+        if (!anchorIds.size) {
+          for (const node of keptNodes) {
+            const nodeType = graphNodeType(node);
+            const nodeId = graphNodeId(node);
+            if (nodeId && (nodeType === "Account" || nodeType === "Customer")) anchorIds.add(nodeId);
+          }
+        }
+        if (anchorIds.size) {
+          keptNodes.push({
+            data: {
+              id: aggregateId,
+              node_type: AGGREGATE_COUNTERPARTY_NODE_TYPE,
+              label: `Other counterparties (${hiddenNodes.length})`,
+              hidden_counterparty_count: hiddenNodes.length,
+              total_amount: aggregateAmount,
+              degree_total: hiddenNodes.length,
+              aggregate_counterparties: true,
+            }
+          });
+          keptNodeIds.add(aggregateId);
+          for (const anchorId of anchorIds) {
+            keptEdges.push({
+              data: {
+                id: edgeIdForAggregate(anchorId, aggregateId),
+                source: anchorId,
+                target: aggregateId,
+                edge_type: "COUNTERPARTY_REMAINDER",
+                label: `${hiddenNodes.length} other counterparties`,
+                hidden_counterparty_count: hiddenNodes.length,
+                total_amount: aggregateAmount,
+              }
+            });
+          }
+        }
+        const connectedKeptNodeIds = new Set();
+        for (const edge of keptEdges) {
+          const d = edge && edge.data ? edge.data : {};
+          if (d.source) connectedKeptNodeIds.add(String(d.source));
+          if (d.target) connectedKeptNodeIds.add(String(d.target));
+        }
+        const finalKeptNodes = keptNodes.filter((node) => {
+          const id = graphNodeId(node);
+          const type = graphNodeType(node);
+          if (!id) return false;
+          if (id === aggregateId) return true;
+          if (SURROGATE_TYPES.has(type)) return connectedKeptNodeIds.has(id);
+          return true;
+        });
+        const finalKeptIds = new Set(finalKeptNodes.map((node) => graphNodeId(node)).filter(Boolean));
+        const finalKeptEdges = keptEdges.filter((edge) => {
+          const d = edge && edge.data ? edge.data : {};
+          return finalKeptIds.has(String(d.source || "")) && finalKeptIds.has(String(d.target || ""));
+        });
+        latestGraphCounterpartyPruning = {
+          visible_count: keepIds.size,
+          hidden_count: hiddenNodes.length,
+          hidden_nodes: hiddenNodes,
+          hidden_edges: hiddenEdges,
+          hidden_ids: Array.from(hiddenIds),
+          aggregate_node_id: aggregateId,
+          expansion_payload: buildCounterpartyExpansionPayload(hiddenNodes, hiddenEdges, allNodeById, finalKeptIds),
+        };
+        return {
+          ...payload,
+          elements: { nodes: finalKeptNodes, edges: finalKeptEdges },
+          node_count: finalKeptNodes.length,
+          edge_count: finalKeptEdges.length,
+        };
+      }
+      function mergeGraphPayloadIntoCy(payload, owner) {
+        if (!cy || !payload || !payload.elements) return { added_nodes: 0, added_edges: 0 };
+        const ownerKey = String(owner || "transaction-counterparties");
+        const nodes = ((payload.elements || {}).nodes || []).map((n) => n.data || {});
+        const edges = ((payload.elements || {}).edges || []).map((e) => e.data || {});
+        let addedNodes = 0;
+        let addedEdges = 0;
+        for (const nd of nodes) {
+          const nid = String(nd.id || "");
+          if (!nid) continue;
+          if (cy.getElementById(nid).length > 0) {
+            addOwner(nodeOwners, nid, ownerKey);
+            continue;
+          }
+          const nodeType = String(nd.node_type || "Node");
+          const baseLabel = String(nd.label || nd.id || "");
+          cy.add({ group: "nodes", data: { ...nd, base_label: baseLabel, display_label: baseLabel, icon_svg: iconForNodeType(nodeType) } });
+          addOwner(nodeOwners, nid, ownerKey);
+          addedNodes += 1;
+        }
+        for (const ed of edges) {
+          const eid = String(ed.id || "");
+          if (!eid) continue;
+          const source = String(ed.source || "");
+          const target = String(ed.target || "");
+          if (!source || !target) continue;
+          if (cy.getElementById(source).length === 0 || cy.getElementById(target).length === 0) continue;
+          if (cy.getElementById(eid).length > 0) {
+            addOwner(edgeOwners, eid, ownerKey);
+            continue;
+          }
+          cy.add({ group: "edges", data: ed });
+          addOwner(edgeOwners, eid, ownerKey);
+          addedEdges += 1;
+        }
+        if (addedNodes > 0 || addedEdges > 0) {
+          cy.layout({ name: "cose", animate: false, fit: false, padding: 20 }).run();
+          refreshNodeLabelsWithExpansionHints();
+        }
+        return { added_nodes: addedNodes, added_edges: addedEdges };
+      }
+      async function expandDeferredTransactionCounterparties() {
+        if (latestGraphCounterpartyPruning && Number(latestGraphCounterpartyPruning.hidden_count || 0) > 0) {
+          const aggregateId = String(latestGraphCounterpartyPruning.aggregate_node_id || "");
+          if (aggregateId && cy) {
+            const aggregateNode = cy.getElementById(aggregateId);
+            if (aggregateNode && aggregateNode.length) {
+              aggregateNode.connectedEdges().remove();
+              aggregateNode.remove();
+            }
+          }
+          const payload = latestGraphCounterpartyPruning.expansion_payload || { elements: { nodes: [], edges: [] } };
+          const merged = mergeGraphPayloadIntoCy(payload, "initial-counterparty-expansion");
+          const hiddenCount = Number(latestGraphCounterpartyPruning.hidden_count || 0);
+          latestGraphCounterpartyPruning = null;
+          renderTransactionGraphEnrichment({ transaction_graph_enrichment: latestTransactionGraphEnrichment || {} });
+          msg(`Expanded ${hiddenCount} hidden counterparty node(s): added ${merged.added_nodes} node(s), ${merged.added_edges} edge(s).`);
+          return;
+        }
+        const enrichment = latestTransactionGraphEnrichment || {};
+        const deferred = Array.isArray(enrichment.deferred_nodes) ? enrichment.deferred_nodes : [];
+        if (!deferred.length) return;
+        const tenantId = selectedTenantId();
+        if (!tenantId) { msg("Select a tenant.", true); return; }
+        const btn = el("expandTxnCounterpartiesBtn");
+        const originalText = btn ? btn.textContent : "";
+        if (btn) { btn.disabled = true; btn.textContent = "Expanding..."; }
+        let addedNodes = 0;
+        let addedEdges = 0;
+        try {
+          for (const row of deferred) {
+            const nodeId = String((row && row.node_id) || "");
+            if (!nodeId) continue;
+            const params = new URLSearchParams();
+            params.set("tenant_id", String(tenantId));
+            params.set("node_id", nodeId);
+            params.set("hops", String(Math.min(Number(el("hops").value || 2), 2)));
+            params.set("max_nodes", String(Math.min(Number(el("maxNodes").value || 500), 350)));
+            params.set("max_edges", String(Math.min(Number(el("maxEdges").value || 2000), 1200)));
+            const payload = compactCounterpartyExpansionPayload(
+              await call("/api/entity-search/exposure-graph?" + params.toString()),
+              nodeId
+            );
+            const merged = mergeGraphPayloadIntoCy(payload, `transaction:${nodeId}`);
+            addedNodes += Number(merged.added_nodes || 0);
+            addedEdges += Number(merged.added_edges || 0);
+          }
+          latestTransactionGraphEnrichment.deferred_nodes = [];
+          latestTransactionGraphEnrichment.deferred_count = 0;
+          renderTransactionGraphEnrichment({ transaction_graph_enrichment: latestTransactionGraphEnrichment });
+          msg(`Expanded transaction counterparties: added ${addedNodes} node(s), ${addedEdges} edge(s).`);
+        } catch (e) {
+          if (btn) { btn.disabled = false; btn.textContent = originalText || "Expand Counterparties"; }
+          msg(`Counterparty expansion failed: ${e.message}`, true);
+        }
+      }
       function refreshNodeLabelsWithExpansionHints() {
         if (!cy) return;
         for (const n of cy.nodes()) {
@@ -734,6 +1182,10 @@
       async function toggleNodeExpansion(node) {
         if (!cy || !node || !node.length) return;
         const nodeId = node.id();
+        if (String(node.data("node_type") || "") === AGGREGATE_COUNTERPARTY_NODE_TYPE) {
+          await expandDeferredTransactionCounterparties();
+          return;
+        }
         if (expandedByNode.has(String(nodeId))) {
           const res = collapseNodeExpansion(nodeId);
           msg(`Collapsed ${nodeId}: removed ${res.removed_nodes} node(s), ${res.removed_edges} edge(s).`);
@@ -751,7 +1203,7 @@
           msg(`Expansion failed: ${e.message}`, true);
         }
       }
-      function clearGraph() {
+      function clearGraph(options={}) {
         if (cy) { cy.destroy(); cy = null; }
         initialNodeIds = new Set();
         initialEdgeIds = new Set();
@@ -766,11 +1218,13 @@
           graphDiv.parentNode.replaceChild(fresh, graphDiv);
         }
         clearDetails();
-        msg("Graph cleared.");
+        if (!(options && options.silent)) msg("Graph cleared.");
       }
       function renderGraph(payload, options={}) {
         const useCollapse = !(options && options.collapse === false);
-        const collapsed = useCollapse ? collapseInitialGraph(payload, EXPAND_HINT_THRESHOLD) : payload;
+        const counterpartyLimited = limitInitialCounterpartyGraph(payload, 4);
+        renderTransactionGraphEnrichment({ transaction_graph_enrichment: latestTransactionGraphEnrichment || {} });
+        const collapsed = useCollapse ? collapseInitialGraph(counterpartyLimited, EXPAND_HINT_THRESHOLD) : counterpartyLimited;
         const graphDiv = el("graph");
         const nodes = ((collapsed.elements || {}).nodes || []).map((n) => {
           const data = n.data || {};
@@ -795,6 +1249,7 @@
             { selector: "node[node_type = 'Customer']", style: { "background-color": "#2d7e46" } },
             { selector: "node[node_type = 'Account']", style: { "background-color": "#155fa0" } },
             { selector: "node[node_type = 'CounterpartyAccount']", style: { "background-color": "#8b5f1f" } },
+            { selector: "node[node_type = 'CounterpartyRemainder']", style: { "background-color": "#a36d21", "border-width": 2, "border-color": "#5b3a14", "width": 30, "height": 30 } },
             { selector: "node[node_type = 'OfacSdn']", style: { "background-color": "#9b1c1c" } },
             { selector: "node[node_type = 'PanamaNode']", style: { "background-color": "#5d3d9b" } },
             { selector: "node[node_type = 'SurrogateName'], node[node_type = 'SurrogateAddress'], node[node_type = 'SurrogateNameAddress']", style: { "background-color": "#6b7280", "shape": "diamond", "width": 16, "height": 16 } }
@@ -874,6 +1329,7 @@
           { selectId: "txnSelectAccountKey", key: "account_key" },
           { selectId: "txnSelectAmlClassification", key: "aml_classification" },
           { selectId: "txnSelectDirection", key: "direction" },
+          { selectId: "txnSelectMechanism", key: "mechanism" },
           { selectId: "txnSelectAmount", key: "amount" },
           { selectId: "txnSelectCountryCode2", key: "country_code_2" },
           { selectId: "txnSelectCurrencyCode", key: "currency_code" },
@@ -918,6 +1374,7 @@
         const fAccount = String(el("txnFilterAccountKey")?.value || "").trim().toLowerCase();
         const fAml = String(el("txnFilterAmlClassification")?.value || "").trim().toLowerCase();
         const fDirection = String(el("txnFilterDirection")?.value || "").trim().toLowerCase();
+        const fMechanism = String(el("txnFilterMechanism")?.value || "").trim().toLowerCase();
         const fCountry = String(el("txnFilterCountryCode2")?.value || "").trim().toLowerCase();
         const fCurrency = String(el("txnFilterCurrencyCode")?.value || "").trim().toLowerCase();
         const fCounterparty = String(el("txnFilterCounterpartyName")?.value || "").trim().toLowerCase();
@@ -926,6 +1383,7 @@
         const sAccount = getSelectedLowerSet("txnSelectAccountKey");
         const sAml = getSelectedLowerSet("txnSelectAmlClassification");
         const sDirection = getSelectedLowerSet("txnSelectDirection");
+        const sMechanism = getSelectedLowerSet("txnSelectMechanism");
         const sAmount = getSelectedLowerSet("txnSelectAmount");
         const sCountry = getSelectedLowerSet("txnSelectCountryCode2");
         const sCurrency = getSelectedLowerSet("txnSelectCurrencyCode");
@@ -939,6 +1397,7 @@
           const accountKey = String(row.account_key || "").toLowerCase();
           const amlClassification = String(row.aml_classification || "").toLowerCase();
           const direction = String(row.direction || "").toLowerCase();
+          const mechanism = String(row.mechanism || "").toLowerCase();
           const amountText = Number(amount || 0).toFixed(2).toLowerCase();
           const countryCode2 = String(row.country_code_2 || "").toLowerCase();
           const currencyCode = String(row.currency_code || "").toLowerCase();
@@ -952,6 +1411,7 @@
           if (fAccount && !accountKey.includes(fAccount)) return false;
           if (fAml && !amlClassification.includes(fAml)) return false;
           if (fDirection && !direction.includes(fDirection)) return false;
+          if (fMechanism && !mechanism.includes(fMechanism)) return false;
           if (fCountry && !countryCode2.includes(fCountry)) return false;
           if (fCurrency && !currencyCode.includes(fCurrency)) return false;
           if (fCounterparty && !counterpartyName.includes(fCounterparty)) return false;
@@ -960,6 +1420,7 @@
           if (sAccount.size && !sAccount.has(accountKey)) return false;
           if (sAml.size && !sAml.has(amlClassification)) return false;
           if (sDirection.size && !sDirection.has(direction)) return false;
+          if (sMechanism.size && !sMechanism.has(mechanism)) return false;
           if (sAmount.size && !sAmount.has(amountText)) return false;
           if (sCountry.size && !sCountry.has(countryCode2)) return false;
           if (sCurrency.size && !sCurrency.has(currencyCode)) return false;
@@ -981,6 +1442,7 @@
           "txnFilterAccountKey",
           "txnFilterAmlClassification",
           "txnFilterDirection",
+          "txnFilterMechanism",
           "txnFilterAmount",
           "txnFilterCountryCode2",
           "txnFilterCurrencyCode",
@@ -995,6 +1457,7 @@
           "txnSelectAccountKey",
           "txnSelectAmlClassification",
           "txnSelectDirection",
+          "txnSelectMechanism",
           "txnSelectAmount",
           "txnSelectCountryCode2",
           "txnSelectCurrencyCode",
@@ -1029,6 +1492,7 @@
             <td>${escapeHtml(row.account_key || "-")}</td>
             <td>${escapeHtml(row.aml_classification || "-")}</td>
             <td>${escapeHtml(row.direction || "-")}</td>
+            <td>${escapeHtml(row.mechanism || "-")}</td>
             <td style="text-align:right;">${Number(row.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
             <td>${escapeHtml(row.country_code_2 || "-")}</td>
             <td>${escapeHtml(row.currency_code || "-")}</td>
@@ -1202,9 +1666,13 @@
           lastQuestionPayload = requestPayload;
           const payload = await callJson("/api/entity-search/exposure-question", "POST", requestPayload);
           renderQuestionAnalysis(payload || {});
+          renderTransactionGraphEnrichment(payload || {});
           if (payload && payload.graph_payload && payload.graph_payload.elements) {
             renderGraph(payload.graph_payload, { collapse: false });
             clearDetails();
+          } else {
+            clearGraph({ silent: true });
+            clearDetails("No graph was returned for this analysis.");
           }
           if (payload && payload.status === "needs_clarification") {
             el("qaStatus").textContent = "Clarification needed.";
@@ -1233,6 +1701,7 @@
         "txnFilterAccountKey",
         "txnFilterAmlClassification",
         "txnFilterDirection",
+        "txnFilterMechanism",
         "txnFilterAmount",
         "txnFilterCountryCode2",
         "txnFilterCurrencyCode",
@@ -1242,6 +1711,7 @@
         "txnSelectAccountKey",
         "txnSelectAmlClassification",
         "txnSelectDirection",
+        "txnSelectMechanism",
         "txnSelectAmount",
         "txnSelectCountryCode2",
         "txnSelectCurrencyCode",

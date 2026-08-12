@@ -1,0 +1,84 @@
+{
+  "schema_version": "2026-04-28.v1",
+  "description": "Additional France transaction wording variants that should remain global and counterparty-jurisdiction scoped.",
+  "cases": [
+    {
+      "name": "how_many_wires_to_france_global",
+      "description": "Count-style wire-to-France wording should use global transaction search without seed search.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "how many wires are there to France",
+          "expect": {
+            "scope": "global",
+            "queried_steps": ["transaction_filter_mapping", "global_transaction_details"],
+            "must_not_query_steps": ["seed_search", "graph_expansion", "transaction_details"],
+            "plan_endpoints": ["/api/graph/exposure/transactions/global"],
+            "filters": {
+              "direction": "Outbound",
+              "mechanism_contains": "Wire",
+              "counterparty_jurisdiction": "FR",
+              "outside_country_code_2": null,
+              "outside_counterparty_jurisdiction": null
+            },
+            "min_tx_rows": 1,
+            "sample_transaction_keys": ["TXN-EXT-900003730"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "find_transactions_to_counterparties_in_france_global",
+      "description": "Counterparties-in-France wording should map to counterparty_jurisdiction rather than transaction country.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "find transactions to counterparties in France",
+          "expect": {
+            "scope": "global",
+            "queried_steps": ["transaction_filter_mapping", "global_transaction_details"],
+            "must_not_query_steps": ["seed_search", "graph_expansion", "transaction_details"],
+            "plan_endpoints": ["/api/graph/exposure/transactions/global"],
+            "filters": {
+              "direction": "Outbound",
+              "mechanism_contains": null,
+              "counterparty_jurisdiction": "FR",
+              "outside_country_code_2": null,
+              "outside_counterparty_jurisdiction": null
+            },
+            "min_tx_rows": 1,
+            "sample_transaction_keys": ["TXN-EXT-900003730"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "find_any_transactions_with_counterparty_in_france_global",
+      "description": "Any-transaction wording should clear mechanism/direction and keep France counterparty jurisdiction.",
+      "tenant_id": 1,
+      "create_session": true,
+      "turns": [
+        {
+          "question": "find any transactions with a counterparty in France",
+          "expect": {
+            "scope": "global",
+            "queried_steps": ["transaction_filter_mapping", "global_transaction_details"],
+            "must_not_query_steps": ["seed_search", "graph_expansion", "transaction_details"],
+            "plan_endpoints": ["/api/graph/exposure/transactions/global"],
+            "filters": {
+              "direction": null,
+              "mechanism_contains": null,
+              "counterparty_jurisdiction": "FR",
+              "outside_country_code_2": null,
+              "outside_counterparty_jurisdiction": null
+            },
+            "min_tx_rows": 4,
+            "sample_transaction_keys": ["TXN-EXT-900005971", "TXN-EXT-900003730"]
+          }
+        }
+      ]
+    }
+  ]
+}

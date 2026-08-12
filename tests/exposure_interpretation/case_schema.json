@@ -1,0 +1,119 @@
+{
+  "schema_version": "2026-04-28.v1",
+  "type": "object",
+  "required": ["schema_version", "cases"],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "tenant_id", "turns"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "integer"
+          },
+          "create_session": {
+            "type": "boolean",
+            "default": true
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["question", "expect"],
+              "properties": {
+                "question": {
+                  "type": "string"
+                },
+                "filter_overrides": {
+                  "type": "object"
+                },
+                "expect": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": ["string", "null"]
+                    },
+                    "status": {
+                      "type": ["string", "null"]
+                    },
+                    "scope": {
+                      "type": ["string", "null"],
+                      "enum": ["global", "seeded", "clarification", null]
+                    },
+                    "queried_steps": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "must_not_query_steps": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "plan_endpoints": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filters": {
+                      "type": "object"
+                    },
+                    "min_tx_rows": {
+                      "type": "integer"
+                    },
+                    "max_tx_rows": {
+                      "type": "integer"
+                    },
+                    "min_evidence_count": {
+                      "type": "integer"
+                    },
+                    "max_evidence_count": {
+                      "type": "integer"
+                    },
+                    "min_enriched_transaction_nodes": {
+                      "type": "integer"
+                    },
+                    "min_graph_nodes": {
+                      "type": "integer"
+                    },
+                    "sample_transaction_keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "clarification_required": {
+                      "type": "boolean"
+                    },
+                    "clarification_labels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
